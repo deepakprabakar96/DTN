@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="ChangeListManager">
+    <list default="true" id="c814a5a9-d97f-4a55-ab26-6d252f5f37a2" name="Default Changelist" comment="" />
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="ProjectId" id="1dw93qTUZXL6VnTw1zWD2WeNb6a" />
+  <component name="ProjectViewState">
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showExcludedFiles" value="true" />
+    <option name="showLibraryContents" value="true" />
+  </component>
+  <component name="PropertiesComponent">
+    <property name="RunOnceActivity.ShowReadmeOnStart" value="true" />
+  </component>
+  <component name="RunManager">
+    <configuration name="MNIST_GAN" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
+      <module name="DTN" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="PARENT_ENVS" value="true" />
+      <envs>
+        <env name="PYTHONUNBUFFERED" value="1" />
+      </envs>
+      <option name="SDK_HOME" value="" />
+      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+      <option name="IS_MODULE_SDK" value="true" />
+      <option name="ADD_CONTENT_ROOTS" value="true" />
+      <option name="ADD_SOURCE_ROOTS" value="true" />
+      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/MNIST_GAN.py" />
+      <option name="PARAMETERS" value="" />
+      <option name="SHOW_COMMAND_LINE" value="false" />
+      <option name="EMULATE_TERMINAL" value="false" />
+      <option name="MODULE_MODE" value="false" />
+      <option name="REDIRECT_INPUT" value="false" />
+      <option name="INPUT_FILE" value="" />
+      <method v="2" />
+    </configuration>
+    <recent_temporary>
+      <list>
+        <item itemvalue="Python.MNIST_GAN" />
+      </list>
+    </recent_temporary>
+  </component>
+  <component name="SvnConfiguration">
+    <configuration />
+  </component>
+  <component name="TaskManager">
+    <task active="true" id="Default" summary="Default task">
+      <changelist id="c814a5a9-d97f-4a55-ab26-6d252f5f37a2" name="Default Changelist" comment="" />
+      <created>1593325091458</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1593325091458</updated>
+    </task>
+    <servers />
+  </component>
+  <component name="WindowStateProjectService">
+    <state width="611" height="211" key="GridCell.Tab.0.bottom" timestamp="1593329343367">
+      <screen x="0" y="0" width="1280" height="800" />
+    </state>
+    <state width="611" height="211" key="GridCell.Tab.0.bottom/0.0.1280.800@0.0.1280.800" timestamp="1593329343367" />
+    <state width="611" height="211" key="GridCell.Tab.0.center" timestamp="1593329343365">
+      <screen x="0" y="0" width="1280" height="800" />
+    </state>
+    <state width="611" height="211" key="GridCell.Tab.0.center/0.0.1280.800@0.0.1280.800" timestamp="1593329343365" />
+    <state width="611" height="211" key="GridCell.Tab.0.left" timestamp="1593329343364">
+      <screen x="0" y="0" width="1280" height="800" />
+    </state>
+    <state width="611" height="211" key="GridCell.Tab.0.left/0.0.1280.800@0.0.1280.800" timestamp="1593329343364" />
+    <state width="611" height="211" key="GridCell.Tab.0.right" timestamp="1593329343366">
+      <screen x="0" y="0" width="1280" height="800" />
+    </state>
+    <state width="611" height="211" key="GridCell.Tab.0.right/0.0.1280.800@0.0.1280.800" timestamp="1593329343366" />
+  </component>
+</project>
