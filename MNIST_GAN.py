@@ -5,6 +5,8 @@ from keras.layers.advanced_activations import LeakyReLU
 from keras.models import Sequential, Model
 from keras.optimizers import Adam
 
+from tqdm import tqdm
+
 import matplotlib
 matplotlib.use('TkAgg')
 import matplotlib.pyplot as plt
@@ -77,33 +79,60 @@ class GAN:
 
     def train(self, epochs, batch_size=128, sample_interval=50):
         (X_train, _), (_, _) = mnist.load_data()
-
+        batch_count = X_train.shape[0] / batch_size
         X_train = X_train / 127.5 - 1.
         X_train = np.expand_dims(X_train, axis=3)
-        valid = np.ones((batch_size, 1))
+        valid = np.ones((batch_size, 1)) * 0.9
         fake = np.zeros((batch_size, 1))
 
-        for epoch in range(epochs):
+        d_loss2save_all = []
+        d_acc2save_all = []
+        g_loss2save_all = []
 
-            idx = np.random.randint(0, X_train.shape[0], batch_size)
-            imgs = X_train[idx]
+        d_loss2save_epoch = []
+        d_acc2save_epoch = []
+        g_loss2save_epoch = []
 
-            noise = np.random.normal(0, 1, (batch_size, self.latent_dim))
+        for epoch in range(epochs+1):
+            print('-'*15, 'Epoch %d' % epoch, '-'*15)
+            for _ in tqdm(range(int(batch_count))):
+                idx = np.random.randint(0, X_train.shape[0], batch_size)
+                imgs = X_train[idx]
 
-            gen_imgs = self.generator.predict(noise)
+                noise = np.random.normal(0, 1, (batch_size, self.latent_dim))
 
-            d_loss_real = self.discriminator.train_on_batch(imgs, valid)
-            d_loss_fake = self.discriminator.train_on_batch(gen_imgs, fake)
-            d_loss = 0.5 * np.add(d_loss_real, d_loss_fake)
+                gen_imgs = self.generator.predict(noise)
 
-            noise = np.random.normal(0, 1, (batch_size, self.latent_dim))
+                self.discriminator.trainable = True
+                d_loss_real = self.discriminator.train_on_batch(imgs, valid)
+                d_loss_fake = self.discriminator.train_on_batch(gen_imgs, fake)
+                self.discriminator.trainable = False
 
-            g_loss = self.combined.train_on_batch(noise, valid)
+                d_loss = 0.5 * np.add(d_loss_real, d_loss_fake)
 
-            print("%d [D loss: %f, acc.: %.2f%%] [G loss: %f]" % (epoch, d_loss[0], 100*d_loss[1], g_loss))
+                noise = np.random.normal(0, 1, (batch_size, self.latent_dim))
 
-            if epoch % sample_interval == 0:
-                self.sample_images(epoch)
+                g_loss = self.combined.train_on_batch(noise, valid)
+                print(d_loss_real[1], d_loss_fake[1])
+                # print("%d [D loss: %f, acc.: %.2f%%] [G loss: %f]" % (epoch, d_loss[0], 100*d_loss[1], g_loss))
+
+                d_loss2save_all.append(d_loss[0])
+                d_acc2save_all.append(d_loss[1])
+                g_loss2save_all.append(g_loss)
+
+                if epoch % sample_interval == 0:
+                    self.sample_images(epoch)
+
+            d_loss2save_epoch.append(d_loss[0])
+            d_acc2save_epoch.append(d_loss[1])
+            g_loss2save_epoch.append(g_loss)
+
+            np.save("saves/d_loss_all.npy", np.array(d_loss2save_all))
+            np.save("saves/d_acc_all.npy", np.array(d_acc2save_all))
+            np.save("saves/g_loss_all.npy", np.array(g_loss2save_all))
+            np.save("saves/d_loss_epoch.npy", np.array(d_loss2save_epoch))
+            np.save("saves/d_acc_epoch.npy", np.array(d_acc2save_epoch))
+            np.save("saves/g_loss_epoch.npy", np.array(g_loss2save_epoch))
 
     def sample_images(self, epoch):
         r, c = 5, 5
@@ -125,5 +154,4 @@ class GAN:
 
 if __name__ == '__main__':
     gan = GAN()
-    gan.train(epochs=100000, batch_size=132, sample_interval=10000)
-
+    gan.train(epochs=220, batch_size=128, sample_interval=1)
