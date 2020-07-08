@@ -97,6 +97,17 @@
     </task>
     <servers />
   </component>
+  <component name="Vcs.Log.Tabs.Properties">
+    <option name="TAB_STATES">
+      <map>
+        <entry key="MAIN">
+          <value>
+            <State />
+          </value>
+        </entry>
+      </map>
+    </option>
+  </component>
   <component name="WindowStateProjectService">
     <state width="1257" height="211" key="GridCell.Tab.0.bottom" timestamp="1593714953543">
       <screen x="0" y="0" width="1280" height="800" />
