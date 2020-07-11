@@ -9,13 +9,14 @@ Change facedet_cascade_path, facenet_model_path
 from facenet.preprocessing import align_images
 
 from keras.layers import Input, Dense, Reshape, Flatten, Dropout
-from keras.layers import BatchNormalization, Activation
 from keras.layers.advanced_activations import LeakyReLU
 from keras.models import Sequential, Model
 from keras.optimizers import Adam
 from keras.initializers import RandomNormal
-from keras.layers import Conv2D
+from keras.layers import Conv2D, Conv2DTranspose
 from keras.models import load_model
+from keras.utils.vis_utils import plot_model
+from keras import backend as K
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -51,6 +52,9 @@ class DTN:
 		self.cascade_facedet = cv2.CascadeClassifier(facedet_cascade_path)
 		self.encoder_f = load_model(facenet_model_path)
 		self.encoder_f.trainable = False
+
+		self.encoder_f2 = load_model(facenet_model_path)
+		self.encoder_f2.trainable = False
 
 		self.decoder_g = self.build_decoder_g()
 
@@ -96,36 +100,21 @@ class DTN:
 		model.add(Conv2D(3, (7,7), activation='tanh', padding='same', kernel_initializer=init))
 		return model
 
-	def L_const(y_true, y_pred):
-		'''
-		keras loss function expects only y_true and y_pred as params.
-		While training on a batch, we pass (source, y_true) for the param y_true 
-		so that we can optimize weights only when x ∈ s.
-		source=1 if x ∈ s, source=0 if x ∈ t
-		'''
-		source, y_t = y_true
-		if source == 1:
-			return (y_t - y_pred)**2
-		else:
-			return 0		# if y_true = y_pred, loss is 0 and weights won't get updated
+	def L_const_wrapper(self,source):
+		def L_const(y_true,y_pred):
+			return source*(y_true - y_pred)**2
+		return L_const
 
-	def L_tid(y_true, y_pred):
-		'''
-		keras loss function expects only y_true and y_pred as params.
-		While training on a batch, we pass (source, y_true) for the param y_true 
-		so that we can optimize weights only when x ∈ t.
-		source=1 if x ∈ t, source=0 if x ∈ s
-		'''
-		source, y_t = y_true
-		if source == 1:
-			return (y_t - y_pred)**2
-		else:
-			return 0		# if y_true = y_pred, loss is 0 and weights won't get updated
+	def L_tid_wrapper(self,source):
+		def L_tid(y_true,y_pred):
+			return (1-source)*(y_true - y_pred)**2
+		return L_tid
 
 	def build_dtn(self):
 		alpha = 100
 		beta = 1
 
+		source = Input(shape=(1,))
 		inp = Input(shape=self.img_shape)
 		encoded_op = self.encoder_f(inp)
 		generator_op = self.decoder_g(encoded_op)
@@ -134,12 +123,18 @@ class DTN:
 
 		encoded_op2 = self.encoder_f(generator_op)
 
-		self.dtn = Model(inputs=inp, outputs=[discriminator_op, encoded_op2, generator_op])
+		self.dtn = Model(inputs=[inp,source], outputs=[discriminator_op, encoded_op2, generator_op])
 
-		losses = {'L_GANG':'categorical_crossentropy','L_const':L_const,'L_tid':L_tid}
-		lossWeights = {'L_GANG':1,'L_const':alpha,'L_tid':beta}
+		losses = ['categorical_crossentropy', self.L_const_wrapper(source), self.L_tid_wrapper(source)]
+		lossWeights = [1,alpha,beta]
 
 		self.dtn.compile(loss=losses, loss_weights=lossWeights, optimizer=self.optimizer)
+
+		print("\n\n"+"*"*15)
+		print("DTN SUMMARY:")
+		print(self.dtn.summary())
+
+		plot_model(self.dtn, to_file='./dtn_plot.png', show_shapes=True, show_layer_names=True)
 
 	def train(self, epochs, batch_size):
 
@@ -153,7 +148,7 @@ class DTN:
 		y_gang = np.concatenate((y_3,y_3))
 
 		for epoch in range(epochs):
-			for batch in tqdm(range(int(faces.shape[0]/batch_size))):
+			for batch in tqdm(range(int(10000/batch_size))):	#update later with size of the dataset
 
 				x_T = load_bitmojis(batch_size)	
 				x_S = load_faces(batch_size)
@@ -175,15 +170,14 @@ class DTN:
 				L_D = L_D1 + L_D2 + L_D3
 				acc_D = (acc_D1 + acc_D2 + acc_D3)/3
 
-				x_dtn = np.concatenate((x_S,x_T))
+				x_dtn = np.concatenate((x_S, x_T))
+				source = np.concatenate((np.ones(batch_size), np.zeros(batch_size)))
 
-				y_const = list(zip(np.ones(batch_size),f_x_S))
-				y_const.extend(list(zip(np.zeros(batch_size),np.zeros(batch_size))))
+				y_const = np.concatenate((f_x_S, np.zeros_like(f_x_S)))
 
-				y_tid = list(zip(np.zeros(batch_size),np.zeros(batch_size)))
-				y_tid.extend(list(zip(np.ones(batch_size),x_T)))
+				y_tid = np.concatenate((np.zeros_like(x_T), x_T))
 
-				L_dtn = self.dtn.train_on_batch(x_dtn, [y_gang, y_const, y_tid])
+				L_dtn = self.dtn.train_on_batch([x_dtn,source], [y_gang, y_const, y_tid])
 
 				print("epoch: "+ str(epoch)+ ", batch_count: "+str(batch) + ", L_D: "+ str(L_D)+ ", L_dtn: "+ str(L_dtn)+ ", accuracy:"+ str(acc_D))
 
