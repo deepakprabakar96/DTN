@@ -1,3 +1,4 @@
+# coding=utf-8
 '''
 Need to update function load_bitmojis()
 Need to update function load_faces()
@@ -7,6 +8,7 @@ Change facedet_cascade_path, facenet_model_path
 '''
 
 from facenet.preprocessing import align_images
+from facenet.preprocessing import prewhiten
 
 from keras.layers import Input, Dense, Reshape, Flatten, Dropout
 from keras.layers.advanced_activations import LeakyReLU
@@ -21,24 +23,12 @@ from keras import backend as K
 import matplotlib.pyplot as plt
 import numpy as np
 import cv2
+import os
 from tqdm import tqdm
 
 
-def load_bitmojis(batch_size):
-	# generate bitmoji images for 1 batch
-	# reshape to (160,160,3)
-	# update later
-	return np.array([np.zeros((160,160,3))]*batch_size)	# temporary
-
-def load_faces(batch_size):
-	# generate face images for 1 batch
-	# reshape to (160,160,3)
-	# update later
-	return np.array([np.zeros((160,160,3))]*batch_size)	# temporary
-
-
 class DTN:
-	def __init__(self, facedet_cascade_path, facenet_model_path):
+	def __init__(self, facedet_cascade_path, facenet_model_path, source_path, target_path):
 		self.img_rows = 160
 		self.img_cols = 160
 		self.channels = 3
@@ -59,7 +49,26 @@ class DTN:
 		self.decoder_g = self.build_decoder_g()
 
 		self.discriminator.trainable = False
+
+		# all class members should be initialized in the init function first
+		self.dtn = Model()
 		self.build_dtn()
+
+		# source_path/source_image
+		self.source_path = source_path
+		self.source_images = [image for image in os.listdir(source_path) if image.endswith(".jpg")]
+		self.n_source_images = len(self.source_images)
+
+		# target_path/target_dict.key/target_dict.value
+		self.target_path = target_path
+		self.target_dict = {}
+		target_dirs = os.listdir(target_path)
+		for target_dir in target_dirs:
+			target_dir_path = os.path.join(self.target_path, target_dir)
+			if not os.path.isdir(target_dir_path):
+				self.target_dict[target_dir] = [image for image in os.listdir(target_dir_path) if image.endswith(".png")]
+
+		self.train_batchsize = 128
 
 	def build_discriminator(self):
 
@@ -91,22 +100,24 @@ class DTN:
 		model.add(LeakyReLU(alpha=0.2))
 		model.add(Reshape((40, 40, 128)))
 		# 80x80x128:
-		model.add(Conv2DTranspose(128, (4,4), strides=(2,2), padding='same', kernel_initializer=init))
+		model.add(Conv2DTranspose(128, (4, 4), strides=(2, 2), padding='same', kernel_initializer=init))
 		model.add(LeakyReLU(alpha=0.2))
 		# 160x160x128:
-		model.add(Conv2DTranspose(128, (4,4), strides=(2,2), padding='same', kernel_initializer=init))
+		model.add(Conv2DTranspose(128, (4, 4), strides=(2, 2), padding='same', kernel_initializer=init))
 		model.add(LeakyReLU(alpha=0.2))
 		# 160x160x3:
 		model.add(Conv2D(3, (7,7), activation='tanh', padding='same', kernel_initializer=init))
 		return model
 
-	def L_const_wrapper(self,source):
-		def L_const(y_true,y_pred):
+	@staticmethod
+	def L_const_wrapper(source):
+		def L_const(y_true, y_pred):
 			return source*(y_true - y_pred)**2
 		return L_const
 
-	def L_tid_wrapper(self,source):
-		def L_tid(y_true,y_pred):
+	@staticmethod
+	def L_tid_wrapper(source):
+		def L_tid(y_true, y_pred):
 			return (1-source)*(y_true - y_pred)**2
 		return L_tid
 
@@ -126,9 +137,9 @@ class DTN:
 		self.dtn = Model(inputs=[inp,source], outputs=[discriminator_op, encoded_op2, generator_op])
 
 		losses = ['categorical_crossentropy', self.L_const_wrapper(source), self.L_tid_wrapper(source)]
-		lossWeights = [1,alpha,beta]
+		loss_weights = [1, alpha, beta]
 
-		self.dtn.compile(loss=losses, loss_weights=lossWeights, optimizer=self.optimizer)
+		self.dtn.compile(loss=losses, loss_weights=loss_weights, optimizer=self.optimizer)
 
 		print("\n\n"+"*"*15)
 		print("DTN SUMMARY:")
@@ -136,22 +147,54 @@ class DTN:
 
 		plot_model(self.dtn, to_file='./dtn_plot.png', show_shapes=True, show_layer_names=True)
 
+	@staticmethod
+	def trim_around_images(image, margin=20):
+		h, w, c = image.shape
+		trimmed_image = image[int(h * margin / 100):int(h * (100 - margin) / 100),
+						int(w * margin / 100):int(w * (100 - margin) / 100), :]
+		return trimmed_image
+
+	def load_target(self, batch_size=None):
+		if not batch_size:
+			batch_size = self.train_batchsize
+
+		key = np.random.choice(self.target_dict.keys())
+		subdir_image_paths = [os.path.join(self.target_path, self.target_dict[key], image_name) for image_name in np.random.choice(self.target_dict[key], batch_size)]
+		batch_images = [cv2.imread(image_path) for image_path in subdir_image_paths]
+		trimmed_batch_images = [self.trim_around_images(image) for image in batch_images]
+		prewhited_batch_images = [prewhiten(image) for image in trimmed_batch_images]
+		batch_as_numpy = np.empty((160, 160, 3, batch_size))
+		for i in range(batch_size):
+			batch_as_numpy[:, :, :, i] = prewhited_batch_images[i]
+		return batch_as_numpy
+
+	def load_source(self, batch_size=None):
+		if not batch_size:
+			batch_size = self.train_batchsize
+		batch_image_paths = [os.path.join(self.source_path, image_name) for image_name in np.random.choice(self.source_images, batch_size)]
+		batch_images = [cv2.cvtColor(cv2.imread(image_path), cv2.COLOR_BGR2RGB) for image_path in batch_image_paths]
+		batch_images_aligned = [self.encoder_preprocess(image) for image in batch_images]
+		batch_as_numpy = np.empty((160, 160, 3, batch_size))
+		for i in range(batch_size):
+			batch_as_numpy[:, :, :, i] = batch_images_aligned[i]
+		return batch_as_numpy
+
 	def train(self, epochs, batch_size):
 
-		y_1 = np.zeros((batch_size,3))
-		y_1[:,2] = np.ones(batch_size)	# [0,0,1] for G(x_s)
-		y_2 = np.zeros((batch_size,3))
-		y_2[:,1] = np.ones(batch_size)	# [0,1,0] for G(x_t)
-		y_3 = np.zeros((batch_size,3))
-		y_3[:,0] = np.ones(batch_size)	# [1,0,0] for x_t
+		y_1 = np.zeros((batch_size, 3))
+		y_1[:, 2] = np.ones(batch_size)	 # [0,0,1] for G(x_s)
+		y_2 = np.zeros((batch_size, 3))
+		y_2[:, 1] = np.ones(batch_size)	 # [0,1,0] for G(x_t)
+		y_3 = np.zeros((batch_size, 3))
+		y_3[:, 0] = np.ones(batch_size)	 # [1,0,0] for x_t
 
-		y_gang = np.concatenate((y_3,y_3))
+		y_gang = np.concatenate((y_3, y_3))
 
 		for epoch in range(epochs):
-			for batch in tqdm(range(int(10000/batch_size))):	#update later with size of the dataset
+			for batch in tqdm(range(int(self.n_source_images/batch_size))):
 
-				x_T = load_bitmojis(batch_size)	
-				x_S = load_faces(batch_size)
+				x_T = self.load_target(batch_size)
+				x_S = self.load_source(batch_size)
 
 				# Important!! :
 				# Normalize bitmoji_imgs: update later
@@ -171,6 +214,7 @@ class DTN:
 				acc_D = (acc_D1 + acc_D2 + acc_D3)/3
 
 				x_dtn = np.concatenate((x_S, x_T))
+
 				source = np.concatenate((np.ones(batch_size), np.zeros(batch_size)))
 
 				y_const = np.concatenate((f_x_S, np.zeros_like(f_x_S)))
@@ -179,9 +223,12 @@ class DTN:
 
 				L_dtn = self.dtn.train_on_batch([x_dtn,source], [y_gang, y_const, y_tid])
 
-				print("epoch: "+ str(epoch)+ ", batch_count: "+str(batch) + ", L_D: "+ str(L_D)+ ", L_dtn: "+ str(L_dtn)+ ", accuracy:"+ str(acc_D))
+				print("epoch: " + str(epoch) + ", batch_count: " + str(batch) + ", L_D: " + str(L_D) + ", L_dtn: " +
+										str(L_dtn) + ", accuracy:" + str(acc_D))
 
 
-facedet_cascade_path = ''
-facenet_model_path = ''
-dtn = DTN(facedet_cascade_path, facenet_model_path)
+if __name__ == "__main__":
+	facedet_cascade_path = ''
+	facenet_model_path = ''
+	dtn = DTN(facedet_cascade_path, facenet_model_path)
+	dtn.train()
