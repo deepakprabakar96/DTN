@@ -1,10 +1,17 @@
 # coding=utf-8
 '''
-Need to update function load_bitmojis()
-Need to update function load_faces()
 Need to add code for normalizing face and bitmoji images in the function train()
-Change encoded_op_shape
-Change facedet_cascade_path, facenet_model_path
+
+Error faced:
+Incompatible shapes: [32,1] vs. [32,160,160,3]
+[[{{node loss_1/sequential_2_loss/L_tid/mul}}]]
+
+Fixed by: Providing different source tensors for L_tid and L_const with their respective shapes
+
+Issues left:
+1. No faces get detected for some source images.
+2. Model has only one encoder, model doesn't split branches into discriminator and encoder 2.
+   Unable to fix this at the moment because building the encoder again for encoder 2 isn't working because of same layer names in facenet model.
 '''
 
 from facenet.preprocessing import align_images
@@ -110,22 +117,17 @@ class DTN:
 		return model
 
 	@staticmethod
-	def L_const_wrapper(source):
-		def L_const(y_true, y_pred):
+	def L_custom_wrapper(source):
+		def L_custom(y_true, y_pred):
 			return source*(y_true - y_pred)**2
-		return L_const
-
-	@staticmethod
-	def L_tid_wrapper(source):
-		def L_tid(y_true, y_pred):
-			return (1-source)*(y_true - y_pred)**2
-		return L_tid
+		return L_custom
 
 	def build_dtn(self):
 		alpha = 100
 		beta = 1
 
-		source = Input(shape=(1,))
+		source_const = Input(shape=(1,))
+		source_tid = Input(shape=(1,1,1))
 		inp = Input(shape=self.img_shape)
 		encoded_op = self.encoder_f(inp)
 		generator_op = self.decoder_g(encoded_op)
@@ -134,9 +136,9 @@ class DTN:
 
 		encoded_op2 = self.encoder_f(generator_op)
 
-		self.dtn = Model(inputs=[inp,source], outputs=[discriminator_op, encoded_op2, generator_op])
+		self.dtn = Model(inputs=[inp, source_const, source_tid], outputs=[discriminator_op, encoded_op2, generator_op])
 
-		losses = ['categorical_crossentropy', self.L_const_wrapper(source), self.L_tid_wrapper(source)]
+		losses = ['categorical_crossentropy', self.L_custom_wrapper(source_const), self.L_custom_wrapper(source_tid)]
 		loss_weights = [1, alpha, beta]
 
 		self.dtn.compile(loss=losses, loss_weights=loss_weights, optimizer=self.optimizer)
@@ -216,13 +218,14 @@ class DTN:
 
 				x_dtn = np.concatenate((x_S, x_T))
 
-				source = np.concatenate((np.ones(batch_size), np.zeros(batch_size)))
+				source_const = np.concatenate((np.ones(batch_size), np.zeros(batch_size)))
+				source_tid = np.concatenate((np.zeros((batch_size,1,1,1)), np.ones((batch_size,1,1,1))))
 
 				y_const = np.concatenate((f_x_S, np.zeros_like(f_x_S)))
 
 				y_tid = np.concatenate((np.zeros_like(x_T), x_T))
 
-				L_dtn = self.dtn.train_on_batch([x_dtn,source], [y_gang, y_const, y_tid])
+				L_dtn = self.dtn.train_on_batch([x_dtn, source_const, source_tid], [y_gang, y_const, y_tid])
 
 				print("epoch: " + str(epoch) + ", batch_count: " + str(batch) + ", L_D: " + str(L_D) + ", L_dtn: " +
 										str(L_dtn) + ", accuracy:" + str(acc_D))
