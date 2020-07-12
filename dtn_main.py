@@ -65,7 +65,7 @@ class DTN:
 		target_dirs = os.listdir(target_path)
 		for target_dir in target_dirs:
 			target_dir_path = os.path.join(self.target_path, target_dir)
-			if not os.path.isdir(target_dir_path):
+			if os.path.isdir(target_dir_path):
 				self.target_dict[target_dir] = [image for image in os.listdir(target_dir_path) if image.endswith(".png")]
 
 		self.train_batchsize = 128
@@ -95,7 +95,7 @@ class DTN:
 		model = Sequential()
 
 		n_nodes = 128 * 40 * 40
-		encoded_op_shape = (0, 0, 0)
+		encoded_op_shape = 128
 		model.add(Dense(n_nodes, kernel_initializer=init, input_dim=encoded_op_shape))
 		model.add(LeakyReLU(alpha=0.2))
 		model.add(Reshape((40, 40, 128)))
@@ -158,14 +158,15 @@ class DTN:
 		if not batch_size:
 			batch_size = self.train_batchsize
 
-		key = np.random.choice(self.target_dict.keys())
-		subdir_image_paths = [os.path.join(self.target_path, self.target_dict[key], image_name) for image_name in np.random.choice(self.target_dict[key], batch_size)]
+		key = np.random.choice(list(self.target_dict.keys()))
+		subdir_image_paths = [os.path.join(self.target_path, key, image_name) for image_name in np.random.choice(self.target_dict[key], batch_size)]
 		batch_images = [cv2.imread(image_path) for image_path in subdir_image_paths]
 		trimmed_batch_images = [self.trim_around_images(image) for image in batch_images]
-		prewhited_batch_images = [prewhiten(image) for image in trimmed_batch_images]
-		batch_as_numpy = np.empty((160, 160, 3, batch_size))
+		prewhited_batch_images = [cv2.resize(prewhiten(image), (self.img_rows,self.img_cols), cv2.INTER_NEAREST) for image in trimmed_batch_images]
+
+		batch_as_numpy = np.empty((batch_size, self.img_rows, self.img_cols, self.channels))
 		for i in range(batch_size):
-			batch_as_numpy[:, :, :, i] = prewhited_batch_images[i]
+			batch_as_numpy[i, :, :, :] = prewhited_batch_images[i]
 		return batch_as_numpy
 
 	def load_source(self, batch_size=None):
@@ -174,9 +175,9 @@ class DTN:
 		batch_image_paths = [os.path.join(self.source_path, image_name) for image_name in np.random.choice(self.source_images, batch_size)]
 		batch_images = [cv2.cvtColor(cv2.imread(image_path), cv2.COLOR_BGR2RGB) for image_path in batch_image_paths]
 		batch_images_aligned = [self.encoder_preprocess(image) for image in batch_images]
-		batch_as_numpy = np.empty((160, 160, 3, batch_size))
+		batch_as_numpy = np.empty((batch_size, self.img_rows, self.img_cols, self.channels))
 		for i in range(batch_size):
-			batch_as_numpy[:, :, :, i] = batch_images_aligned[i]
+			batch_as_numpy[i, :, :, :] = batch_images_aligned[i]
 		return batch_as_numpy
 
 	def train(self, epochs, batch_size):
@@ -228,7 +229,9 @@ class DTN:
 
 
 if __name__ == "__main__":
-	facedet_cascade_path = ''
-	facenet_model_path = ''
-	dtn = DTN(facedet_cascade_path, facenet_model_path)
-	dtn.train()
+	facedet_cascade_path = './facenet/haarcascade_frontalface_alt2.xml'
+	facenet_model_path = './facenet/facenet_keras.h5'
+	source_path = './img_align_celeba'
+	target_path = './cartoonset100k'
+	dtn = DTN(facedet_cascade_path, facenet_model_path, source_path, target_path)
+	dtn.train(epochs=10, batch_size=16)
