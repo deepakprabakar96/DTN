@@ -1,8 +1,21 @@
 # coding=utf-8
 '''
-Need to update function load_bitmojis()
-Need to update function load_faces()
-Need to add code for normalizing face and bitmoji images in the function train()
+
+Updates
+-------
+1. Need to update function load_bitmojis() --> Completed
+2. Need to update function load_faces() --> Completed
+3. Need to add code for normalizing face and bitmoji images in the function train() --> Completed
+4. Added TensorBoard support that needs to be tested
+5. Added function to save model and optimizer weights
+6. Changed loading of source images to exclude images where faces aren't detected
+
+To-do
+-----
+1. Mechanism to load model and optimizer weights
+2. Test model and weight saving system, TensorBoard callback
+
+??
 Change encoded_op_shape
 Change facedet_cascade_path, facenet_model_path
 '''
@@ -19,8 +32,13 @@ from keras.layers import Conv2D, Conv2DTranspose
 from keras.models import load_model
 from keras.utils.vis_utils import plot_model
 from keras import backend as K
+import keras
+
+import tensorflow as tf
+import TensorBoard
 
 import matplotlib.pyplot as plt
+import pickle
 import numpy as np
 import cv2
 import os
@@ -28,7 +46,7 @@ from tqdm import tqdm
 
 
 class DTN:
-	def __init__(self, facedet_cascade_path, facenet_model_path, source_path, target_path):
+	def __init__(self, facedet_cascade_path, facenet_model_path, source_path, no_faceslist_path, target_path, batch_save_frequency=100):
 		self.img_rows = 160
 		self.img_cols = 160
 		self.channels = 3
@@ -40,23 +58,32 @@ class DTN:
 		self.discriminator.compile(loss='categorical_crossentropy', optimizer=self.optimizer, metrics=['accuracy'])
 
 		self.cascade_facedet = cv2.CascadeClassifier(facedet_cascade_path)
+
 		self.encoder_f = load_model(facenet_model_path)
+		self.encoder_f.name += '_0'
 		self.encoder_f.trainable = False
 
 		self.encoder_f2 = load_model(facenet_model_path)
+		self.encoder_f2.name += '_1'
 		self.encoder_f2.trainable = False
 
 		self.decoder_g = self.build_decoder_g()
 
 		self.discriminator.trainable = False
 
+		self.log_path = "./logs"
+		self.save_path = "./model"
+		self.batch_save_frequency = batch_save_frequency
+
 		# all class members should be initialized in the init function first
 		self.dtn = Model()
 		self.build_dtn()
 
 		# source_path/source_image
+		no_faces_list = list(np.load(no_faceslist_path))
 		self.source_path = source_path
-		self.source_images = [image for image in os.listdir(source_path) if image.endswith(".jpg")]
+		self.source_images = [image for image in os.listdir(source_path) if image.endswith(".jpg") and
+																			image not in no_faces_list]
 		self.n_source_images = len(self.source_images)
 
 		# target_path/target_dict.key/target_dict.value
@@ -75,10 +102,10 @@ class DTN:
 		init = RandomNormal(stddev=0.02)
 		model = Sequential()
 
-		model.add(Conv2D(64, (4,4), strides=(2,2), padding='same', kernel_initializer=init, input_shape=self.img_shape))
+		model.add(Conv2D(64, (4, 4), strides=(2, 2), padding='same', kernel_initializer=init, input_shape=self.img_shape))
 		model.add(LeakyReLU(alpha=0.2))
 
-		model.add(Conv2D(64, (4,4), strides=(2,2), padding='same', kernel_initializer=init))
+		model.add(Conv2D(64, (4, 4), strides=(2, 2), padding='same', kernel_initializer=init))
 		model.add(LeakyReLU(alpha=0.2))
 
 		model.add(Flatten())
@@ -106,7 +133,7 @@ class DTN:
 		model.add(Conv2DTranspose(128, (4, 4), strides=(2, 2), padding='same', kernel_initializer=init))
 		model.add(LeakyReLU(alpha=0.2))
 		# 160x160x3:
-		model.add(Conv2D(3, (7,7), activation='tanh', padding='same', kernel_initializer=init))
+		model.add(Conv2D(3, (7, 7), activation='tanh', padding='same', kernel_initializer=init))
 		return model
 
 	@staticmethod
@@ -132,16 +159,16 @@ class DTN:
 
 		discriminator_op = self.discriminator(generator_op)
 
-		encoded_op2 = self.encoder_f(generator_op)
+		encoded_op2 = self.encoder_f2(generator_op)
 
-		self.dtn = Model(inputs=[inp,source], outputs=[discriminator_op, encoded_op2, generator_op])
+		self.dtn = Model(inputs=[inp, source], outputs=[discriminator_op, encoded_op2, generator_op])
 
 		losses = ['categorical_crossentropy', self.L_const_wrapper(source), self.L_tid_wrapper(source)]
 		loss_weights = [1, alpha, beta]
 
 		self.dtn.compile(loss=losses, loss_weights=loss_weights, optimizer=self.optimizer)
 
-		print("\n\n"+"*"*15)
+		print("\n\n" + "*" * 15)
 		print("DTN SUMMARY:")
 		print(self.dtn.summary())
 
@@ -151,7 +178,7 @@ class DTN:
 	def trim_around_images(image, margin=20):
 		h, w, c = image.shape
 		trimmed_image = image[int(h * margin / 100):int(h * (100 - margin) / 100),
-						int(w * margin / 100):int(w * (100 - margin) / 100), :]
+									int(w * margin / 100):int(w * (100 - margin) / 100), :]
 		return trimmed_image
 
 	def load_target(self, batch_size=None):
@@ -159,7 +186,8 @@ class DTN:
 			batch_size = self.train_batchsize
 
 		key = np.random.choice(self.target_dict.keys())
-		subdir_image_paths = [os.path.join(self.target_path, self.target_dict[key], image_name) for image_name in np.random.choice(self.target_dict[key], batch_size)]
+		subdir_image_paths = [os.path.join(self.target_path, self.target_dict[key], image_name)
+												for image_name in np.random.choice(self.target_dict[key], batch_size)]
 		batch_images = [cv2.imread(image_path) for image_path in subdir_image_paths]
 		trimmed_batch_images = [self.trim_around_images(image) for image in batch_images]
 		prewhited_batch_images = [prewhiten(image) for image in trimmed_batch_images]
@@ -171,13 +199,48 @@ class DTN:
 	def load_source(self, batch_size=None):
 		if not batch_size:
 			batch_size = self.train_batchsize
-		batch_image_paths = [os.path.join(self.source_path, image_name) for image_name in np.random.choice(self.source_images, batch_size)]
+		batch_image_paths = [os.path.join(self.source_path, image_name) for image_name in
+												np.random.choice(self.source_images, batch_size)]
 		batch_images = [cv2.cvtColor(cv2.imread(image_path), cv2.COLOR_BGR2RGB) for image_path in batch_image_paths]
 		batch_images_aligned = [self.encoder_preprocess(image) for image in batch_images]
 		batch_as_numpy = np.empty((160, 160, 3, batch_size))
 		for i in range(batch_size):
 			batch_as_numpy[:, :, :, i] = batch_images_aligned[i]
 		return batch_as_numpy
+
+	@staticmethod
+	def write_log(callback, names, logs, batch_no):
+		# ------------------------------------------------------ #
+		# ----- Check link for TensorBoard implementation ------ #
+		# https://github.com/eriklindernoren/Keras-GAN/issues/52 #
+		# ------------------------------------------------------ #
+
+		for name, value in zip(names, logs):
+			summary = tf.Summary()
+			summary_value = summary.value.add()
+			summary_value.simple_value = value
+			summary_value.tag = name
+			callback.writer.add_summary(summary, batch_no)
+			callback.writer.flush()
+
+	def save_model(self, model, model_type, batch_number):
+		"""
+		:param model: model to be saved
+		:param model_type: discriminator/generator
+		:param batch_number: batch number (duh!)
+		:return: None
+		"""
+		# # https://stackoverflow.com/questions/49503748/save-and-load-model-optimizer-state # #
+
+		model_prefix = model_type + "_" + str(batch_number)
+		symbolic_weights = getattr(model.optimizer, "weights")
+		weight_values = K.batch_get_value(symbolic_weights)
+		model_path = os.path.join(self.save_path, model_prefix + ".h5")
+		weight_path = os.path.join(self.save_path, model_prefix + "weights.pkl")
+
+		model.save_weights(model_path)
+		with open(weight_path, 'wb') as f:
+			pickle.dump(weight_values, f)
 
 	def train(self, epochs, batch_size):
 
@@ -190,9 +253,27 @@ class DTN:
 
 		y_gang = np.concatenate((y_3, y_3))
 
-		for epoch in range(epochs):
-			for batch in tqdm(range(int(self.n_source_images/batch_size))):
+		# --------------------------------------------------------------------- #
+		# # Alternate method using keras callback --> callback.on_epoch_end() # #
+		# # https://gist.github.com/erenon/91f526302cd8e9d21b73f24c0f9c4bb8   # #
+		# --------------------------------------------------------------------- #
+		# d_callback = keras.callbacks.TensorBoard(log_dir=self.log_path, histogram_freq=0, batch_size=batch_size,
+		# 											write_graph=True, write_grads=True)
+		# d_callback.set_model(self.discriminator)
+		# g_callback = keras.callbacks.TensorBoard(log_dir=self.log_path, histogram_freq=0, batch_size=batch_size,
+		# 											write_graph=True, write_grads=True)
+		# g_callback.set_model(self.dtn)
+		# --------------------------------------------------------------------- #
 
+		d_callback = TensorBoard(self.log_path)
+		d_callback.set_model(self.discriminator)
+		g_callback = TensorBoard(self.log_path)
+		g_callback.set_model(self.dtn)
+
+		num_batches_per_epoch = int(self.n_source_images/batch_size)
+		for epoch in range(epochs):
+			for batch in tqdm(range(num_batches_per_epoch)):
+				batch_number = epoch * num_batches_per_epoch + batch + 1
 				x_T = self.load_target(batch_size)
 				x_S = self.load_source(batch_size)
 
@@ -213,6 +294,12 @@ class DTN:
 				L_D = L_D1 + L_D2 + L_D3
 				acc_D = (acc_D1 + acc_D2 + acc_D3)/3
 
+				if batch_number % self.batch_save_frequency == 0:
+					self.save_model(self.discriminator, "discriminator", batch_number)
+
+				self.write_log(d_callback, ['ld1', 'ld2', 'ld3', 'ld', 'ad1', 'ad2', 'ad3', 'ad'],
+									[L_D1, L_D2, L_D3, L_D, acc_D1, acc_D2, acc_D3, acc_D], batch_number)
+
 				x_dtn = np.concatenate((x_S, x_T))
 
 				source = np.concatenate((np.ones(batch_size), np.zeros(batch_size)))
@@ -221,7 +308,12 @@ class DTN:
 
 				y_tid = np.concatenate((np.zeros_like(x_T), x_T))
 
-				L_dtn = self.dtn.train_on_batch([x_dtn,source], [y_gang, y_const, y_tid])
+				L_dtn = self.dtn.train_on_batch([x_dtn, source], [y_gang, y_const, y_tid])
+
+				if batch_number % self.batch_save_frequency == 0:
+					self.save_model(self.dtn, "generator", batch_number)
+
+				self.write_log(g_callback, ['lg'], [L_dtn], batch_number)
 
 				print("epoch: " + str(epoch) + ", batch_count: " + str(batch) + ", L_D: " + str(L_D) + ", L_dtn: " +
 										str(L_dtn) + ", accuracy:" + str(acc_D))
