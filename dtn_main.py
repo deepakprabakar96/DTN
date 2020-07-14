@@ -3,22 +3,13 @@
 
 Updates
 -------
-1. Need to update function load_bitmojis() --> Completed
-2. Need to update function load_faces() --> Completed
-3. Need to add code for normalizing face and bitmoji images in the function train() --> Completed
-4. Added TensorBoard support that needs to be tested
-5. Added function to save model and optimizer weights
-6. Changed loading of source images to exclude images where faces aren't detected
+1. Added L_GANG, L_CONST and L_TID to the callback.
+2. Fixed a bug for aligning source images --> preprocessing.py
+3. Validated tensorboard functionality.
 
 To-do
 -----
-1. Mechanism to load model and optimizer weights
-2. Test model and weight saving system, TensorBoard callback
-
-??
-Change encoded_op_shape
-Change facedet_cascade_path, facenet_model_path
-
+1. Mechanism to save and load model and optimizer weights
 '''
 
 from facenet.preprocessing import align_images
@@ -36,7 +27,7 @@ from keras import backend as K
 import keras
 
 import tensorflow as tf
-import TensorBoard
+from keras.callbacks import TensorBoard
 
 import matplotlib.pyplot as plt
 import pickle
@@ -74,6 +65,12 @@ class DTN:
 
 		self.log_path = "./logs"
 		self.save_path = "./model"
+
+		if not os.path.exists(self.log_path):
+			os.makedirs(self.log_path)
+		if not os.path.exists(self.save_path):
+			os.makedirs(self.save_path)
+
 		self.batch_save_frequency = batch_save_frequency
 
 		# all class members should be initialized in the init function first
@@ -270,7 +267,7 @@ class DTN:
 
 		num_batches_per_epoch = int(self.n_source_images/batch_size)
 		for epoch in range(epochs):
-			for batch in tqdm(range(num_batches_per_epoch)):
+			for batch in range(num_batches_per_epoch):
 				batch_number = epoch * num_batches_per_epoch + batch + 1
 				x_T = self.load_target(batch_size)
 				x_S = self.load_source(batch_size)
@@ -295,7 +292,7 @@ class DTN:
 				if batch_number % self.batch_save_frequency == 0:
 					self.save_model(self.discriminator, "discriminator", batch_number)
 
-				self.write_log(d_callback, ['ld1', 'ld2', 'ld3', 'ld', 'ad1', 'ad2', 'ad3', 'ad'],
+				self.write_log(d_callback, ['D1_LOSS', 'D2_LOSS', 'D3_LOSS', 'D_LOSS', 'D1_ACC', 'D2_ACC', 'D3_ACC', 'D_ACC'],
 									[L_D1, L_D2, L_D3, L_D, acc_D1, acc_D2, acc_D3, acc_D], batch_number)
 
 				x_dtn = np.concatenate((x_S, x_T))
@@ -312,7 +309,7 @@ class DTN:
 				if batch_number % self.batch_save_frequency == 0:
 					self.save_model(self.dtn, "generator", batch_number)
 
-				self.write_log(g_callback, ['lg'], [L_dtn], batch_number)
+				self.write_log(g_callback, ['G_LOSS','L_GANG','L_CONST','L_TID'], [L_dtn[0],L_dtn[1],L_dtn[2],L_dtn[3]], batch_number)
 
 				print("epoch: " + str(epoch) + ", batch_count: " + str(batch) + ", L_D: " + str(L_D) + ", L_dtn: " +
 										str(L_dtn) + ", accuracy:" + str(acc_D))
@@ -323,5 +320,6 @@ if __name__ == "__main__":
 	facenet_model_path = './facenet/facenet_keras.h5'
 	source_path = './img_align_celeba'
 	target_path = './cartoonset100k'
-	dtn = DTN(facedet_cascade_path, facenet_model_path, source_path, target_path)
+	no_faceslist_path = "./no_faces.npy"
+	dtn = DTN(facedet_cascade_path, facenet_model_path, source_path, no_faceslist_path, target_path)
 	dtn.train(epochs=10, batch_size=16)

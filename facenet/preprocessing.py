@@ -27,7 +27,7 @@ def l2_normalize(x, axis=-1, epsilon=1e-10):
 def align_images(cascade, img, margin=10, image_size=160):
     faces = cascade.detectMultiScale(img, scaleFactor=1.1, minNeighbors=3)
     (x, y, w, h) = faces[0]
-    cropped = img[y-margin//2:y+h+margin//2, x-margin//2:x+w+margin//2, :]
+    cropped = img[max(y-margin//2,0):min(y+h+margin//2,img.shape[0]), max(x-margin//2,0):min(x+w+margin//2,img.shape[1]), :]
     aligned = resize(cropped, (image_size, image_size), mode='reflect')
     return aligned
 
