@@ -3,13 +3,19 @@
 
 Updates
 -------
-1. Added L_GANG, L_CONST and L_TID to the callback.
-2. Fixed a bug for aligning source images --> preprocessing.py
-3. Validated tensorboard functionality.
+1. Added verbosity for debugging
+2. Initialized model and optimizer weight paths in the class
 
 To-do
 -----
-1. Mechanism to save and load model and optimizer weights
+1. Mechanism to load model and optimizer weights
+2. Load keras-facenet model from weights to fix segmentation fault (or re-save it on latest keras version)
+
+Pending Issues
+--------------
+1. Optimizer shape mismatch while loading
+2. Keras version mismatch not allowing loading of facenet model directly (need to create graph and load weights)
+
 '''
 
 from facenet.preprocessing import align_images
@@ -29,7 +35,6 @@ import keras
 import tensorflow as tf
 from keras.callbacks import TensorBoard
 
-import matplotlib.pyplot as plt
 import pickle
 import numpy as np
 import cv2
@@ -38,30 +43,8 @@ from tqdm import tqdm
 
 
 class DTN:
-	def __init__(self, facedet_cascade_path, facenet_model_path, source_path, no_faceslist_path, target_path, batch_save_frequency=100):
-		self.img_rows = 160
-		self.img_cols = 160
-		self.channels = 3
-		self.img_shape = (self.img_rows, self.img_cols, self.channels)
-
-		self.optimizer = Adam(0.0002, 0.5)
-
-		self.discriminator = self.build_discriminator()
-		self.discriminator.compile(loss='categorical_crossentropy', optimizer=self.optimizer, metrics=['accuracy'])
-
-		self.cascade_facedet = cv2.CascadeClassifier(facedet_cascade_path)
-
-		self.encoder_f = load_model(facenet_model_path)
-		self.encoder_f.name += '_0'
-		self.encoder_f.trainable = False
-
-		self.encoder_f2 = load_model(facenet_model_path)
-		self.encoder_f2.name += '_1'
-		self.encoder_f2.trainable = False
-
-		self.decoder_g = self.build_decoder_g()
-
-		self.discriminator.trainable = False
+	def __init__(self, facedet_cascade_path, facenet_model_path, source_path, no_faceslist_path, target_path, batch_save_frequency=100, verbose=False, from_ckpt=True):
+		self.verbose = verbose
 
 		self.log_path = "./logs"
 		self.save_path = "./model"
@@ -73,9 +56,51 @@ class DTN:
 
 		self.batch_save_frequency = batch_save_frequency
 
+		# Initialize model and optimizer weight paths
+		self.from_ckpt = True
+		self.weight_paths = ()
+		self.initialize_ckpt_paths(from_ckpt)
+
+		self.img_rows = 160
+		self.img_cols = 160
+		self.channels = 3
+		self.img_shape = (self.img_rows, self.img_cols, self.channels)
+
+		self.optimizer = Adam(0.0002, 0.5)
+
+		self.discriminator = self.build_discriminator()
+
+		self.discriminator.compile(loss='categorical_crossentropy', optimizer=self.optimizer, metrics=['accuracy'])
+
+		if self.verbose: print("Discriminator built and compiled!\n")
+
+		self.cascade_facedet = cv2.CascadeClassifier(facedet_cascade_path)
+
+		if self.verbose: print("Face detection model Loaded!\n")
+
+		self.encoder_f = load_model(facenet_model_path)
+		self.encoder_f.name += '_0'
+		self.encoder_f.trainable = False
+
+		if self.verbose: print("Encoder_0 loaded!\n")
+
+		self.encoder_f2 = load_model(facenet_model_path)
+		self.encoder_f2.name += '_1'
+		self.encoder_f2.trainable = False
+
+		if self.verbose: print("Encoder_1 loaded!\n")
+
+		self.decoder_g = self.build_decoder_g()
+
+		if self.verbose: print("Generator built!\n")
+
+		self.discriminator.trainable = False
+
 		# all class members should be initialized in the init function first
 		self.dtn = Model()
 		self.build_dtn()
+
+		if self.verbose: print("DTN model built!\n")
 
 		# source_path/source_image
 		no_faces_list = list(np.load(no_faceslist_path))
@@ -83,6 +108,8 @@ class DTN:
 		self.source_images = [image for image in os.listdir(source_path) if image.endswith(".jpg") and
 																			image not in no_faces_list]
 		self.n_source_images = len(self.source_images)
+
+		if self.verbose: print("Source dataset processed!\n")
 
 		# target_path/target_dict.key/target_dict.value
 		self.target_path = target_path
@@ -93,7 +120,47 @@ class DTN:
 			if os.path.isdir(target_dir_path):
 				self.target_dict[target_dir] = [image for image in os.listdir(target_dir_path) if image.endswith(".png")]
 
+		if self.verbose: print("Target dataset processed!\n")
+
 		self.train_batchsize = 128
+
+	def initialize_ckpt_paths(self, from_ckpt):
+		all_ckpts = list(set([int(model_name[:-2].split("_")[-1]) for model_name in os.listdir(self.save_path)
+								if model_name.endswith(".h5")]))
+
+		if isinstance(from_ckpt, int):  # Provide batch number to be picked up
+			ckpt_number = from_ckpt
+			if ckpt_number in all_ckpts:
+				self.from_ckpt = True
+				d_weights_path = os.path.join(self.save_path, "discriminator_" + str(ckpt_number) + ".h5")
+				d_optimizer_path = os.path.join(self.save_path, "discriminator_" + str(ckpt_number) + "_weights.pkl")
+				g_weights_path = os.path.join(self.save_path, "generator_" + str(ckpt_number) + ".h5")
+				g_optimizer_path = os.path.join(self.save_path, "generator_" + str(ckpt_number) + "_weights.pkl")
+				self.weight_paths = (d_weights_path, d_optimizer_path, g_weights_path, g_optimizer_path)
+			else:
+				self.from_ckpt = False
+
+		elif isinstance(from_ckpt, tuple):  # Provide paths of model and optimizer weights directly
+			self.from_ckpt = True
+			self.weight_paths = from_ckpt  # (d_weights.h5, d_optimizer.pkl, dtn_weights.h5, dtn_optimizer.pkl)
+
+		elif from_ckpt:  # Pick up most recent checkpoint
+			if all_ckpts:
+				self.from_ckpt = True
+				ckpt_number = max(all_ckpts)
+				d_weights_path = os.path.join(self.save_path, "discriminator_" + str(ckpt_number) + ".h5")
+				d_optimizer_path = os.path.join(self.save_path, "discriminator_" + str(ckpt_number) + "_weights.pkl")
+				g_weights_path = os.path.join(self.save_path, "generator_" + str(ckpt_number) + ".h5")
+				g_optimizer_path = os.path.join(self.save_path, "generator_" + str(ckpt_number) + "_weights.pkl")
+				self.weight_paths = (d_weights_path, d_optimizer_path, g_weights_path, g_optimizer_path)
+			else:
+				self.from_ckpt = False
+
+		else:  # Train from scratch
+			self.from_ckpt = False
+
+		if self.from_ckpt:
+			assert len(self.weight_paths) == 4
 
 	def build_discriminator(self):
 
@@ -132,6 +199,7 @@ class DTN:
 		model.add(LeakyReLU(alpha=0.2))
 		# 160x160x3:
 		model.add(Conv2D(3, (7, 7), activation='tanh', padding='same', kernel_initializer=init))
+
 		return model
 
 	@staticmethod
@@ -231,13 +299,14 @@ class DTN:
 		symbolic_weights = getattr(model.optimizer, "weights")
 		weight_values = K.batch_get_value(symbolic_weights)
 		model_path = os.path.join(self.save_path, model_prefix + ".h5")
-		weight_path = os.path.join(self.save_path, model_prefix + "weights.pkl")
+		weight_path = os.path.join(self.save_path, model_prefix + "_weights.pkl")
 
 		model.save_weights(model_path)
 		with open(weight_path, 'wb') as f:
 			pickle.dump(weight_values, f)
 
 	def train(self, epochs, batch_size):
+		if self.verbose: print("Training Started!\n")
 
 		y_1 = np.zeros((batch_size, 3))
 		y_1[:, 2] = np.ones(batch_size)	 # [0,0,1] for G(x_s)
@@ -309,17 +378,30 @@ class DTN:
 				if batch_number % self.batch_save_frequency == 0:
 					self.save_model(self.dtn, "generator", batch_number)
 
-				self.write_log(g_callback, ['G_LOSS','L_GANG','L_CONST','L_TID'], [L_dtn[0],L_dtn[1],L_dtn[2],L_dtn[3]], batch_number)
+				self.write_log(g_callback, ['G_LOSS', 'L_GANG', 'L_CONST', 'L_TID'],
+								[L_dtn[0], L_dtn[1], L_dtn[2], L_dtn[3]], batch_number)
 
 				print("epoch: " + str(epoch) + ", batch_count: " + str(batch) + ", L_D: " + str(L_D) + ", L_dtn: " +
 										str(L_dtn) + ", accuracy:" + str(acc_D))
 
+		if self.verbose: print("Training completed!\n")
+
 
 if __name__ == "__main__":
-	facedet_cascade_path = './facenet/haarcascade_frontalface_alt2.xml'
-	facenet_model_path = './facenet/facenet_keras.h5'
-	source_path = './img_align_celeba'
-	target_path = './cartoonset100k'
+	# facedet_cascade_path = './facenet/haarcascade_frontalface_alt2.xml'
+	# facenet_model_path = './facenet/facenet_keras.h5'
+	# source_path = './img_align_celeba'
+	# target_path = './cartoonset100k'
+	# no_faceslist_path = "./no_faces.npy"
+
+	# # PATHS FOR DEEPAK PLISS TO COMMENT IF IT IS INTERFERING # #
+	facedet_cascade_path = '../keras-facenet/model/cv2/haarcascade_frontalface_alt2.xml'
+	facenet_model_path = '../keras-facenet/model/facenet_keras.h5'
+	source_path = '/Volumes/Macintosh HD/DTN/img_align_celeba_samples'
+	target_path = '/Volumes/Macintosh HD/DTN/cartoonset10k_samples'
 	no_faceslist_path = "./no_faces.npy"
-	dtn = DTN(facedet_cascade_path, facenet_model_path, source_path, no_faceslist_path, target_path)
+	##############################################################
+
+	verbose = True
+	dtn = DTN(facedet_cascade_path, facenet_model_path, source_path, no_faceslist_path, target_path, verbose=verbose)
 	dtn.train(epochs=10, batch_size=16)
