@@ -3,18 +3,19 @@
 
 Updates
 -------
-1. Added verbosity for debugging
-2. Initialized model and optimizer weight paths in the class
+1. Saving discriminator and decoder_g using model.save() and saving only optimizer weights for dtn
+2. Mechanism to load model and optimizer weights --> done 
 
 To-do
 -----
-1. Mechanism to load model and optimizer weights
+1. Initialize and set optimizer weights for dtn before training.
 2. Load keras-facenet model from weights to fix segmentation fault (or re-save it on latest keras version)
 
 Pending Issues
 --------------
 1. Optimizer shape mismatch while loading
 2. Keras version mismatch not allowing loading of facenet model directly (need to create graph and load weights)
+3. Loading discriminator model using load_model() is unable to load optimizer state and is initializing optimizer instead.
 
 '''
 
@@ -68,11 +69,15 @@ class DTN:
 
 		self.optimizer = Adam(0.0002, 0.5)
 
-		self.discriminator = self.build_discriminator()
+		if self.from_ckpt == False:
+			self.discriminator = self.build_discriminator()
+			self.discriminator.compile(loss='categorical_crossentropy', optimizer=self.optimizer, metrics=['accuracy'])
+			if self.verbose: print("Discriminator built and compiled!\n")
+		else:
+			self.discriminator = load_model(self.weight_paths[0])
+			if self.verbose: print("Discriminator model loaded!\n")
 
 		self.discriminator.compile(loss='categorical_crossentropy', optimizer=self.optimizer, metrics=['accuracy'])
-
-		if self.verbose: print("Discriminator built and compiled!\n")
 
 		self.cascade_facedet = cv2.CascadeClassifier(facedet_cascade_path)
 
@@ -90,9 +95,12 @@ class DTN:
 
 		if self.verbose: print("Encoder_1 loaded!\n")
 
-		self.decoder_g = self.build_decoder_g()
-
-		if self.verbose: print("Generator built!\n")
+		if self.from_ckpt == False:
+			self.decoder_g = self.build_decoder_g()
+			if self.verbose: print("Generator built!\n")
+		else:
+			self.decoder_g = load_model(self.weight_paths[1])
+			if self.verbose: print("Generator model loaded!\n")
 
 		self.discriminator.trainable = False
 
@@ -125,18 +133,17 @@ class DTN:
 		self.train_batchsize = 128
 
 	def initialize_ckpt_paths(self, from_ckpt):
-		all_ckpts = list(set([int(model_name[:-2].split("_")[-1]) for model_name in os.listdir(self.save_path)
+		all_ckpts = list(set([int(model_name[:-3].split("_")[-1]) for model_name in os.listdir(self.save_path)
 								if model_name.endswith(".h5")]))
 
-		if isinstance(from_ckpt, int):  # Provide batch number to be picked up
+		if type(from_ckpt) == int:  # Provide batch number to be picked up
 			ckpt_number = from_ckpt
 			if ckpt_number in all_ckpts:
 				self.from_ckpt = True
-				d_weights_path = os.path.join(self.save_path, "discriminator_" + str(ckpt_number) + ".h5")
-				d_optimizer_path = os.path.join(self.save_path, "discriminator_" + str(ckpt_number) + "_weights.pkl")
-				g_weights_path = os.path.join(self.save_path, "generator_" + str(ckpt_number) + ".h5")
-				g_optimizer_path = os.path.join(self.save_path, "generator_" + str(ckpt_number) + "_weights.pkl")
-				self.weight_paths = (d_weights_path, d_optimizer_path, g_weights_path, g_optimizer_path)
+				d_model_path = os.path.join(self.save_path, "discriminator_" + str(ckpt_number) + ".h5")
+				g_model_path = os.path.join(self.save_path, "generator_" + str(ckpt_number) + ".h5")
+				dtn_optimizer_path = os.path.join(self.save_path, "dtn_" + str(ckpt_number) + "_weights.pkl")
+				self.weight_paths = (d_model_path, g_model_path, dtn_optimizer_path)
 			else:
 				self.from_ckpt = False
 
@@ -144,15 +151,14 @@ class DTN:
 			self.from_ckpt = True
 			self.weight_paths = from_ckpt  # (d_weights.h5, d_optimizer.pkl, dtn_weights.h5, dtn_optimizer.pkl)
 
-		elif from_ckpt:  # Pick up most recent checkpoint
+		elif from_ckpt==True:  # Pick up most recent checkpoint
 			if all_ckpts:
 				self.from_ckpt = True
 				ckpt_number = max(all_ckpts)
-				d_weights_path = os.path.join(self.save_path, "discriminator_" + str(ckpt_number) + ".h5")
-				d_optimizer_path = os.path.join(self.save_path, "discriminator_" + str(ckpt_number) + "_weights.pkl")
-				g_weights_path = os.path.join(self.save_path, "generator_" + str(ckpt_number) + ".h5")
-				g_optimizer_path = os.path.join(self.save_path, "generator_" + str(ckpt_number) + "_weights.pkl")
-				self.weight_paths = (d_weights_path, d_optimizer_path, g_weights_path, g_optimizer_path)
+				d_model_path = os.path.join(self.save_path, "discriminator_" + str(ckpt_number) + ".h5")
+				g_model_path = os.path.join(self.save_path, "generator_" + str(ckpt_number) + ".h5")
+				dtn_optimizer_path = os.path.join(self.save_path, "dtn_" + str(ckpt_number) + "_weights.pkl")
+				self.weight_paths = (d_model_path, g_model_path, dtn_optimizer_path)
 			else:
 				self.from_ckpt = False
 
@@ -160,7 +166,7 @@ class DTN:
 			self.from_ckpt = False
 
 		if self.from_ckpt:
-			assert len(self.weight_paths) == 4
+			assert len(self.weight_paths) == 3
 
 	def build_discriminator(self):
 
@@ -229,6 +235,14 @@ class DTN:
 
 		self.dtn.compile(loss=losses, loss_weights=loss_weights, optimizer=self.optimizer)
 
+		# Figure out how to initiliaze optimizer with weights shape. 
+		# This seems to work only after training one batch:
+		# if self.from_ckpt==True:
+		# 	with open(self.weight_paths[2], 'rb') as f:
+		# 		opt_values = pickle.load(f)
+		# 	self.dtn.optimizer.set_weights(opt_values)
+		# 	self.from_ckpt = False
+
 		print("\n\n" + "*" * 15)
 		print("DTN SUMMARY:")
 		print(self.dtn.summary())
@@ -293,17 +307,16 @@ class DTN:
 		:param batch_number: batch number (duh!)
 		:return: None
 		"""
-		# # https://stackoverflow.com/questions/49503748/save-and-load-model-optimizer-state # #
-
 		model_prefix = model_type + "_" + str(batch_number)
-		symbolic_weights = getattr(model.optimizer, "weights")
-		weight_values = K.batch_get_value(symbolic_weights)
-		model_path = os.path.join(self.save_path, model_prefix + ".h5")
-		weight_path = os.path.join(self.save_path, model_prefix + "_weights.pkl")
-
-		model.save_weights(model_path)
-		with open(weight_path, 'wb') as f:
-			pickle.dump(weight_values, f)
+		if model_type == 'dtn':
+			symbolic_weights = getattr(model.optimizer, "weights")
+			weight_values = K.batch_get_value(symbolic_weights)
+			weight_path = os.path.join(self.save_path, model_prefix + "_weights.pkl")
+			with open(weight_path, 'wb') as f:
+				pickle.dump(weight_values, f)
+		else:
+			model_path = os.path.join(self.save_path, model_prefix + ".h5")
+			model.save(model_path)
 
 	def train(self, epochs, batch_size):
 		if self.verbose: print("Training Started!\n")
@@ -375,8 +388,16 @@ class DTN:
 
 				L_dtn = self.dtn.train_on_batch([x_dtn, source_const, source_tid], [y_gang, y_const, y_tid])
 
+				# set optimizer state after training one batch: 
+				if self.from_ckpt==True:
+					with open(self.weight_paths[2], 'rb') as f:
+						opt_values = pickle.load(f)
+					self.dtn.optimizer.set_weights(opt_values)
+					self.from_ckpt = False
+
 				if batch_number % self.batch_save_frequency == 0:
-					self.save_model(self.dtn, "generator", batch_number)
+					self.save_model(self.decoder_g, "generator", batch_number)
+					self.save_model(self.dtn, "dtn", batch_number)
 
 				self.write_log(g_callback, ['G_LOSS', 'L_GANG', 'L_CONST', 'L_TID'],
 								[L_dtn[0], L_dtn[1], L_dtn[2], L_dtn[3]], batch_number)
