@@ -1,3 +1,5 @@
 .idea/
 .ipynb_checkpoints
 facenet/__pycache__
+logs/
+model/

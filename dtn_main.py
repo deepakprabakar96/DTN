@@ -3,17 +3,17 @@
 
 Updates
 -------
-1. Fixed loading optimizer state for discriminator model.
+1.  Passing batch_size to the dtn model during initialization to avoid discrepancies between retraining and training
+----> can be done by saving a config file containing other important details and loading batch_size from that
+2. Move from batch number centered approach to training
 
 To-do
 -----
-1. Initialize and set optimizer weights for dtn before training.
-2. Load keras-facenet model from weights to fix segmentation fault (or re-save it on latest keras version)
+1. Try to initialize and set optimizer weights for dtn before training.
 
 Pending Issues
 --------------
 1. Optimizer shape mismatch while loading
-2. Keras version mismatch not allowing loading of facenet model directly (need to create graph and load weights)
 
 '''
 
@@ -42,7 +42,8 @@ from tqdm import tqdm
 
 
 class DTN:
-	def __init__(self, facedet_cascade_path, facenet_model_path, source_path, no_faceslist_path, target_path, batch_save_frequency=100, verbose=False, from_ckpt=True):
+	def __init__(self, facedet_cascade_path, facenet_model_path, source_path, no_faceslist_path, target_path,
+								train_batchsize=16, batch_save_frequency=100, verbose=False, from_ckpt=False):
 		self.verbose = verbose
 
 		self.log_path = "./logs"
@@ -58,6 +59,8 @@ class DTN:
 		# Initialize model and optimizer weight paths
 		self.from_ckpt = True
 		self.weight_paths = ()
+		self.ckpt_number = -1
+
 		self.initialize_ckpt_paths(from_ckpt)
 
 		self.img_rows = 160
@@ -65,14 +68,19 @@ class DTN:
 		self.channels = 3
 		self.img_shape = (self.img_rows, self.img_cols, self.channels)
 
+		self.train_batchsize = train_batchsize
 		self.optimizer = Adam(0.0002, 0.5)
 
 		self.discriminator = self.build_discriminator()
+
+		if self.from_ckpt:
+			self.discriminator.load_weights(self.weight_paths[0])
+			if self.verbose: print("Discriminator model loaded!\n")
+
 		self.discriminator.compile(loss='categorical_crossentropy', optimizer=self.optimizer, metrics=['accuracy'])
-		if self.from_ckpt == True:
-			self.discriminator.set_weights(self.weight_paths[0])
-		
-		if self.verbose: print("Discriminator built and compiled!\n")
+
+		if not self.from_ckpt:
+			if self.verbose: print("Discriminator built and compiled!\n")
 
 		self.cascade_facedet = cv2.CascadeClassifier(facedet_cascade_path)
 
@@ -90,12 +98,12 @@ class DTN:
 
 		if self.verbose: print("Encoder_1 loaded!\n")
 
-		if self.from_ckpt == False:
-			self.decoder_g = self.build_decoder_g()
-			if self.verbose: print("Generator built!\n")
-		else:
+		if self.from_ckpt:
 			self.decoder_g = load_model(self.weight_paths[2])
 			if self.verbose: print("Generator model loaded!\n")
+		else:
+			self.decoder_g = self.build_decoder_g()
+			if self.verbose: print("Generator built!\n")
 
 		self.discriminator.trainable = False
 
@@ -125,14 +133,14 @@ class DTN:
 
 		if self.verbose: print("Target dataset processed!\n")
 
-		self.train_batchsize = 128
-
 	def initialize_ckpt_paths(self, from_ckpt):
 		all_ckpts = list(set([int(model_name[:-3].split("_")[-1]) for model_name in os.listdir(self.save_path)
 								if model_name.endswith(".h5")]))
 
 		if type(from_ckpt) == int:  # Provide batch number to be picked up
+			if self.verbose: print("Batch number provided\n")
 			ckpt_number = from_ckpt
+			self.ckpt_number = ckpt_number
 			if ckpt_number in all_ckpts:
 				self.from_ckpt = True
 				d_weights_path = os.path.join(self.save_path, "discriminator_" + str(ckpt_number) + ".h5")
@@ -144,13 +152,16 @@ class DTN:
 				self.from_ckpt = False
 
 		elif isinstance(from_ckpt, tuple):  # Provide paths of model and optimizer weights directly
+			if self.verbose: print("Weight paths provided\n")
 			self.from_ckpt = True
 			self.weight_paths = from_ckpt  # (d_weights.h5, d_optimizer.pkl, dtn_weights.h5, dtn_optimizer.pkl)
 
 		elif from_ckpt==True:  # Pick up most recent checkpoint
+			if self.verbose: print("Latest weight paths taken\n")
 			if all_ckpts:
 				self.from_ckpt = True
 				ckpt_number = max(all_ckpts)
+				self.ckpt_number = ckpt_number
 				d_weights_path = os.path.join(self.save_path, "discriminator_" + str(ckpt_number) + ".h5")
 				d_optimizer_path = os.path.join(self.save_path, "discriminator_" + str(ckpt_number) + "_weights.pkl")
 				g_model_path = os.path.join(self.save_path, "generator_" + str(ckpt_number) + ".h5")
@@ -160,6 +171,7 @@ class DTN:
 				self.from_ckpt = False
 
 		else:  # Train from scratch
+			if self.verbose: print("No weights chosen; training from scratch\n")
 			self.from_ckpt = False
 
 		if self.from_ckpt:
@@ -244,7 +256,7 @@ class DTN:
 		print("DTN SUMMARY:")
 		print(self.dtn.summary())
 
-		plot_model(self.dtn, to_file='./dtn_plot.png', show_shapes=True, show_layer_names=True)
+		# plot_model(self.dtn, to_file='./dtn_plot.png', show_shapes=True, show_layer_names=True)
 
 	@staticmethod
 	def trim_around_images(image, margin=20):
@@ -262,7 +274,7 @@ class DTN:
 								for image_name in np.random.choice(self.target_dict[random_key], batch_size)]
 		batch_images = [cv2.imread(image_path) for image_path in subdir_image_paths]
 		trimmed_batch_images = [self.trim_around_images(image) for image in batch_images]
-		prewhited_batch_images = [cv2.resize(prewhiten(image), (self.img_rows,self.img_cols), cv2.INTER_NEAREST)
+		prewhited_batch_images = [cv2.resize(prewhiten(image), (self.img_rows, self.img_cols), cv2.INTER_NEAREST)
 								for image in trimmed_batch_images]
 
 		batch_as_numpy = np.empty((batch_size, self.img_rows, self.img_cols, self.channels))
@@ -320,9 +332,9 @@ class DTN:
 			model_path = os.path.join(self.save_path, model_prefix + ".h5")
 			model.save(model_path)
 
-	def train(self, epochs, batch_size):
+	def train(self, epochs):
 		if self.verbose: print("Training Started!\n")
-
+		batch_size = self.train_batchsize
 		y_1 = np.zeros((batch_size, 3))
 		y_1[:, 2] = np.ones(batch_size)	 # [0,0,1] for G(x_s)
 		y_2 = np.zeros((batch_size, 3))
@@ -349,68 +361,72 @@ class DTN:
 		g_callback = TensorBoard(self.log_path)
 		g_callback.set_model(self.dtn)
 
-		num_batches_per_epoch = int(self.n_source_images/batch_size)
-		for epoch in range(epochs):
-			for batch in range(num_batches_per_epoch):
-				batch_number = epoch * num_batches_per_epoch + batch + 1
-				x_T = self.load_target(batch_size)
-				x_S = self.load_source(batch_size)
+		if self.ckpt_number != -1 and self.from_ckpt:
+			batch_number = self.ckpt_number
+			epochs_from_batch_number = np.round(batch_number * batch_size / self.n_source_images, 3)
+		else:
+			batch_number = 0
+			epochs_from_batch_number = 0
 
-				# Important!! :
-				# Normalize bitmoji_imgs: update later
-				# Normalize faces: update later
+		while epochs_from_batch_number <= epochs:
+			batch_number = batch_number + 1
+			epochs_from_batch_number = np.round(batch_number * batch_size / self.n_source_images, 3)
+			x_T = self.load_target(batch_size)
+			x_S = self.load_source(batch_size)
 
-				f_x_S = self.encoder_f.predict(x_S)
-				f_x_T = self.encoder_f.predict(x_T)
+			# Important!! :
+			# Normalize bitmoji_imgs: update later
+			# Normalize faces: update later
 
-				g_x_S = self.decoder_g.predict(f_x_S)
-				g_x_T = self.decoder_g.predict(f_x_T)
+			f_x_S = self.encoder_f.predict(x_S)
+			f_x_T = self.encoder_f.predict(x_T)
 
-				L_D1, acc_D1 = self.discriminator.train_on_batch(g_x_S, y_1)
-				L_D2, acc_D2 = self.discriminator.train_on_batch(g_x_T, y_2)
-				L_D3, acc_D3 = self.discriminator.train_on_batch(x_T, y_3)
+			g_x_S = self.decoder_g.predict(f_x_S)
+			g_x_T = self.decoder_g.predict(f_x_T)
 
-				L_D = L_D1 + L_D2 + L_D3
-				acc_D = (acc_D1 + acc_D2 + acc_D3)/3
+			L_D1, acc_D1 = self.discriminator.train_on_batch(g_x_S, y_1)
+			L_D2, acc_D2 = self.discriminator.train_on_batch(g_x_T, y_2)
+			L_D3, acc_D3 = self.discriminator.train_on_batch(x_T, y_3)
 
-				if batch_number % self.batch_save_frequency == 0:
-					self.save_model(self.discriminator, "discriminator", batch_number)
+			L_D = L_D1 + L_D2 + L_D3
+			acc_D = (acc_D1 + acc_D2 + acc_D3)/3
 
-				self.write_log(d_callback, ['D1_LOSS', 'D2_LOSS', 'D3_LOSS', 'D_LOSS', 'D1_ACC', 'D2_ACC', 'D3_ACC', 'D_ACC'],
-									[L_D1, L_D2, L_D3, L_D, acc_D1, acc_D2, acc_D3, acc_D], batch_number)
+			if batch_number % self.batch_save_frequency == 0:
+				self.save_model(self.discriminator, "discriminator", batch_number)
 
-				x_dtn = np.concatenate((x_S, x_T))
+			self.write_log(d_callback, ['D1_LOSS', 'D2_LOSS', 'D3_LOSS', 'D_LOSS', 'D1_ACC', 'D2_ACC', 'D3_ACC', 'D_ACC'],
+								[L_D1, L_D2, L_D3, L_D, acc_D1, acc_D2, acc_D3, acc_D], batch_number)
 
-				source_const = np.concatenate((np.ones(batch_size), np.zeros(batch_size)))
-				source_tid = np.concatenate((np.zeros((batch_size, 1, 1, 1)), np.ones((batch_size, 1, 1, 1))))
+			x_dtn = np.concatenate((x_S, x_T))
 
-				y_const = np.concatenate((f_x_S, np.zeros_like(f_x_S)))
+			source_const = np.concatenate((np.ones(batch_size), np.zeros(batch_size)))
+			source_tid = np.concatenate((np.zeros((batch_size, 1, 1, 1)), np.ones((batch_size, 1, 1, 1))))
 
-				y_tid = np.concatenate((np.zeros_like(x_T), x_T))
+			y_const = np.concatenate((f_x_S, np.zeros_like(f_x_S)))
 
-				L_dtn = self.dtn.train_on_batch([x_dtn, source_const, source_tid], [y_gang, y_const, y_tid])
+			y_tid = np.concatenate((np.zeros_like(x_T), x_T))
 
-				# set optimizer state after training one batch: 
-				if self.from_ckpt==True:
-					with open(self.weight_paths[3], 'rb') as f:
-						opt_values = pickle.load(f)
-					self.dtn.optimizer.set_weights(opt_values)
+			L_dtn = self.dtn.train_on_batch([x_dtn, source_const, source_tid], [y_gang, y_const, y_tid])
 
-					with open(self.weight_paths[1], 'rb') as f:
-						opt_values = pickle.load(f)
-					self.discriminator.optimizer.set_weights(opt_values)
+			# set optimizer state after training one batch:
+			if self.from_ckpt and batch_number == 1:
+				with open(self.weight_paths[3], 'rb') as f:
+					opt_values = pickle.load(f)
+				self.dtn.optimizer.set_weights(opt_values)
 
-					self.from_ckpt = False
+				with open(self.weight_paths[1], 'rb') as f:
+					opt_values = pickle.load(f)
+				self.discriminator.optimizer.set_weights(opt_values)
 
-				if batch_number % self.batch_save_frequency == 0:
-					self.save_model(self.decoder_g, "generator", batch_number)
-					self.save_model(self.dtn, "dtn", batch_number)
+			if batch_number % self.batch_save_frequency == 0:
+				self.save_model(self.decoder_g, "generator", batch_number)
+				self.save_model(self.dtn, "dtn", batch_number)
 
-				self.write_log(g_callback, ['G_LOSS', 'L_GANG', 'L_CONST', 'L_TID'],
-								[L_dtn[0], L_dtn[1], L_dtn[2], L_dtn[3]], batch_number)
+			self.write_log(g_callback, ['G_LOSS', 'L_GANG', 'L_CONST', 'L_TID'],
+							[L_dtn[0], L_dtn[1], L_dtn[2], L_dtn[3]], batch_number)
 
-				print("epoch: " + str(epoch) + ", batch_count: " + str(batch) + ", L_D: " + str(L_D) + ", L_dtn: " +
-										str(L_dtn) + ", accuracy:" + str(acc_D))
+			print("batch number: " + str(batch_number) + ", calculated epoch: " + str(epochs_from_batch_number)
+								+ ", L_D: " + str(L_D) + ", L_dtn: " + str(L_dtn) + ", accuracy:" + str(acc_D))
 
 		if self.verbose: print("Training completed!\n")
 
@@ -424,12 +440,12 @@ if __name__ == "__main__":
 
 	# # PATHS FOR DEEPAK PLISS TO COMMENT IF IT IS INTERFERING # #
 	facedet_cascade_path = '../keras-facenet/model/cv2/haarcascade_frontalface_alt2.xml'
-	facenet_model_path = '../keras-facenet/model/facenet_keras.h5'
+	facenet_model_path = '../keras-facenet/model/new_facenet_keras.h5'
 	source_path = '/Volumes/Macintosh HD/DTN/img_align_celeba_samples'
 	target_path = '/Volumes/Macintosh HD/DTN/cartoonset10k_samples'
 	no_faceslist_path = "./no_faces.npy"
 	##############################################################
 
 	verbose = True
-	dtn = DTN(facedet_cascade_path, facenet_model_path, source_path, no_faceslist_path, target_path, verbose=verbose)
-	dtn.train(epochs=10, batch_size=16)
+	dtn = DTN(facedet_cascade_path, facenet_model_path, source_path, no_faceslist_path, target_path, verbose=verbose, batch_save_frequency=10, from_ckpt=True, train_batchsize=16)
+	dtn.train(epochs=10)
