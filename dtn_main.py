@@ -3,9 +3,7 @@
 
 Updates
 -------
-1.  Passing batch_size to the dtn model during initialization to avoid discrepancies between retraining and training
-----> can be done by saving a config file containing other important details and loading batch_size from that
-2. Move from batch number centered approach to training
+1. Loading and preprocessing fixed
 
 To-do
 -----
