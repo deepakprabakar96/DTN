@@ -36,6 +36,7 @@ from keras.callbacks import TensorBoard
 
 import pickle
 import numpy as np
+from skimage.transform import resize
 import cv2
 import os
 from tqdm import tqdm
@@ -43,7 +44,7 @@ from tqdm import tqdm
 
 class DTN:
 	def __init__(self, facedet_cascade_path, facenet_model_path, source_path, no_faceslist_path, target_path,
-								train_batchsize=16, batch_save_frequency=100, verbose=False, from_ckpt=False):
+								train_batchsize=16, batch_save_frequency=100, verbose=False, from_ckpt=False, predict=False):
 		self.verbose = verbose
 
 		self.log_path = "./logs"
@@ -132,6 +133,12 @@ class DTN:
 				self.target_dict[target_dir] = [image for image in os.listdir(target_dir_path) if image.endswith(".png")]
 
 		if self.verbose: print("Target dataset processed!\n")
+
+		if predict and self.from_ckpt:
+			self.pred_model = Model()
+			self.build_pred_network()
+		elif predict and not self.from_ckpt:
+			print("from_ckpt cannot be False")
 
 	def initialize_ckpt_paths(self, from_ckpt):
 		all_ckpts = list(set([int(model_name[:-3].split("_")[-1]) for model_name in os.listdir(self.save_path)
@@ -272,15 +279,15 @@ class DTN:
 		random_key = np.random.choice(list(self.target_dict.keys()))
 		subdir_image_paths = [os.path.join(self.target_path, random_key, image_name)
 								for image_name in np.random.choice(self.target_dict[random_key], batch_size)]
-		batch_images = [cv2.imread(image_path) for image_path in subdir_image_paths]
-		trimmed_batch_images = [self.trim_around_images(image) for image in batch_images]
-		prewhited_batch_images = [cv2.resize(prewhiten(image), (self.img_rows, self.img_cols), cv2.INTER_NEAREST)
-								for image in trimmed_batch_images]
+		batch_images = [cv2.cvtColor(cv2.imread(image_path), cv2.COLOR_BGR2RGB) for image_path in subdir_image_paths]
+		batch_images_trimmed = [self.trim_around_images(image) for image in batch_images]
+		batch_images_resized = [resize(image, (self.img_rows, self.img_cols), mode='reflect')
+								for image in batch_images_trimmed]
 
 		batch_as_numpy = np.empty((batch_size, self.img_rows, self.img_cols, self.channels))
 		for i in range(batch_size):
-			batch_as_numpy[i, :, :, :] = prewhited_batch_images[i]
-		return batch_as_numpy
+			batch_as_numpy[i, :, :, :] = batch_images_resized[i]
+		return prewhiten(batch_as_numpy)
 
 	def load_source(self, batch_size=None):
 		if not batch_size:
@@ -292,7 +299,7 @@ class DTN:
 		batch_as_numpy = np.empty((batch_size, self.img_rows, self.img_cols, self.channels))
 		for i in range(batch_size):
 			batch_as_numpy[i, :, :, :] = batch_images_aligned[i]
-		return batch_as_numpy
+		return prewhiten(batch_as_numpy)
 
 	@staticmethod
 	def write_log(callback, names, logs, batch_no):
@@ -429,6 +436,12 @@ class DTN:
 								+ ", L_D: " + str(L_D) + ", L_dtn: " + str(L_dtn) + ", accuracy:" + str(acc_D))
 
 		if self.verbose: print("Training completed!\n")
+
+	def build_pred_network(self):
+		inp = Input(shape=self.img_shape)
+		encoded_op = self.encoder_f(inp)
+		generator_op = self.decoder_g(encoded_op)
+		self.pred_model = Model(inputs=inp, outputs=generator_op)
 
 
 if __name__ == "__main__":
