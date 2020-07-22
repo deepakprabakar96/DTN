@@ -38,11 +38,12 @@ from skimage.transform import resize
 import cv2
 import os
 from tqdm import tqdm
+import matplotlib.pyplot as plt
 
 
 class DTN:
-	def __init__(self, facedet_cascade_path, facenet_model_path, source_path, no_faceslist_path, target_path,
-								train_batchsize=16, batch_save_frequency=100, verbose=False, from_ckpt=False, predict=False):
+	def __init__(self, facedet_cascade_path, facenet_model_path, source_path, source_list_path, target_dict_path, target_path,
+								output_path, train_batchsize=16, batch_save_frequency=100, verbose=False, from_ckpt=False, predict=False):
 		self.verbose = verbose
 
 		self.log_path = "./logs"
@@ -113,30 +114,29 @@ class DTN:
 		if self.verbose: print("DTN model built!\n")
 
 		# source_path/source_image
-		no_faces_list = list(np.load(no_faceslist_path))
 		self.source_path = source_path
-		self.source_images = [image for image in os.listdir(source_path) if image.endswith(".jpg") and
-																			image not in no_faces_list]
+
+		f = open(source_list_path, 'rb')
+		self.source_images = pickle.load(f)
+		f.close()
 		self.n_source_images = len(self.source_images)
 
 		if self.verbose: print("Source dataset processed!\n")
 
 		# target_path/target_dict.key/target_dict.value
 		self.target_path = target_path
-		self.target_dict = {}
-		target_dirs = os.listdir(target_path)
-		for target_dir in target_dirs:
-			target_dir_path = os.path.join(self.target_path, target_dir)
-			if os.path.isdir(target_dir_path):
-				self.target_dict[target_dir] = [image for image in os.listdir(target_dir_path) if image.endswith(".png")]
+
+		f = open(target_dict_path, 'rb')
+		self.target_dict = pickle.load(f)
+		f.close()
 
 		if self.verbose: print("Target dataset processed!\n")
 
-		if predict and self.from_ckpt:
-			self.pred_model = Model()
-			self.build_pred_network()
-		elif predict and not self.from_ckpt:
-			print("from_ckpt cannot be False")
+		self.output_path = output_path
+
+		self.predict = predict
+		self.pred_model = Model()
+		self.build_pred_network()
 
 	def initialize_ckpt_paths(self, from_ckpt):
 		all_ckpts = list(set([int(model_name[:-3].split("_")[-1]) for model_name in os.listdir(self.save_path)
@@ -379,9 +379,28 @@ class DTN:
 			x_T = self.load_target(batch_size)
 			x_S = self.load_source(batch_size)
 
-			# Important!! :
-			# Normalize bitmoji_imgs: update later
-			# Normalize faces: update later
+			if self.predict and not self.from_ckpt:
+				print('from_ckpt cannot be False')
+				break
+
+			if self.predict or batch_number % self.batch_save_frequency == 0:
+
+				pred_x_T = self.pred_model.predict(x_T)
+				pred_x_S = self.pred_model.predict(x_S)
+
+				os.mkdir(self.output_path+'/{}_batches'.format(batch_number))
+
+				for i in range(batch_size):
+					fig, axs = plt.subplots(2,2)
+					axs[0,0].imshow(x_T[i])
+					axs[0,1].imshow(pred_x_T[i])
+					axs[1,0].imshow(x_S[i])
+					axs[1,1].imshow(pred_x_S[i])
+					fig.savefig(self.output_path+"/{0}_batches/{1}.png".format(batch_number,i))
+					if self.predict:
+						plt.show()
+				if self.predict:
+					break
 
 			f_x_S = self.encoder_f.predict(x_S)
 			f_x_T = self.encoder_f.predict(x_T)
@@ -447,16 +466,17 @@ if __name__ == "__main__":
 	# facenet_model_path = './facenet/facenet_keras.h5'
 	# source_path = './img_align_celeba'
 	# target_path = './cartoonset100k'
-	# no_faceslist_path = "./no_faces.npy"
+	source_list_path = './source_list.pkl'
+	target_dict_path = './target_dict.pkl'
+	output_path = './outputs'
 
 	# # PATHS FOR DEEPAK PLISS TO COMMENT IF IT IS INTERFERING # #
 	facedet_cascade_path = '../keras-facenet/model/cv2/haarcascade_frontalface_alt2.xml'
 	facenet_model_path = '../keras-facenet/model/new_facenet_keras.h5'
 	source_path = '/Volumes/Macintosh HD/DTN/img_align_celeba_samples'
 	target_path = '/Volumes/Macintosh HD/DTN/cartoonset10k_samples'
-	no_faceslist_path = "./no_faces.npy"
 	##############################################################
 
 	verbose = True
-	dtn = DTN(facedet_cascade_path, facenet_model_path, source_path, no_faceslist_path, target_path, verbose=verbose, batch_save_frequency=10, from_ckpt=True, train_batchsize=16)
+	dtn = DTN(facedet_cascade_path, facenet_model_path, source_path, source_list_path, target_dict_path, target_path, output_path, verbose=verbose, batch_save_frequency=160, from_ckpt=False, train_batchsize=16, predict=False)
 	dtn.train(epochs=10)
