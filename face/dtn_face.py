@@ -1,19 +1,4 @@
 # coding=utf-8
-'''
-
-Updates
--------
-1. Loading and preprocessing fixed
-
-To-do
------
-1. Try to initialize and set optimizer weights for dtn before training.
-
-Pending Issues
---------------
-1. Optimizer shape mismatch while loading
-
-'''
 
 from facenet.preprocessing import align_images
 from facenet.preprocessing import prewhiten
@@ -43,7 +28,7 @@ import matplotlib.pyplot as plt
 
 class DTN:
 	def __init__(self, facedet_cascade_path, facenet_model_path, source_path, source_list_path, target_dict_path, target_path,
-								output_path, train_batchsize=16, batch_save_frequency=100, verbose=False, from_ckpt=False, predict=False):
+								output_path, target_dataset='bitmoji', train_batchsize=16, batch_save_frequency=100, verbose=False, from_ckpt=False, predict=False):
 		self.verbose = verbose
 
 		self.log_path = "./logs"
@@ -107,13 +92,11 @@ class DTN:
 
 		self.discriminator.trainable = False
 
-		# all class members should be initialized in the init function first
 		self.dtn = Model()
 		self.build_dtn()
 
 		if self.verbose: print("DTN model built!\n")
 
-		# source_path/source_image
 		self.source_path = source_path
 
 		f = open(source_list_path, 'rb')
@@ -123,12 +106,15 @@ class DTN:
 
 		if self.verbose: print("Source dataset processed!\n")
 
-		# target_path/target_dict.key/target_dict.value
 		self.target_path = target_path
+		self.target_dataset = target_dataset
 
-		f = open(target_dict_path, 'rb')
-		self.target_dict = pickle.load(f)
-		f.close()
+		if self.target_dataset == 'cartoonset100k':
+			f = open(target_dict_path, 'rb')
+			self.target_images = pickle.load(f)
+			f.close()
+		else:	# bitmoji
+			self.target_images = os.listdir(target_path)
 
 		if self.verbose: print("Target dataset processed!\n")
 
@@ -229,8 +215,8 @@ class DTN:
 		return L_custom
 
 	def build_dtn(self):
-		alpha = 100
-		beta = 1
+		alpha = 16
+		beta = 16
 
 		source_const = Input(shape=(1,))
 		source_tid = Input(shape=(1,1,1))
@@ -249,14 +235,6 @@ class DTN:
 
 		self.dtn.compile(loss=losses, loss_weights=loss_weights, optimizer=self.optimizer)
 
-		# Figure out how to initiliaze optimizer with weights shape. 
-		# This seems to work only after training one batch:
-		# if self.from_ckpt==True:
-		# 	with open(self.weight_paths[2], 'rb') as f:
-		# 		opt_values = pickle.load(f)
-		# 	self.dtn.optimizer.set_weights(opt_values)
-		# 	self.from_ckpt = False
-
 		print("\n\n" + "*" * 15)
 		print("DTN SUMMARY:")
 		print(self.dtn.summary())
@@ -274,9 +252,13 @@ class DTN:
 		if not batch_size:
 			batch_size = self.train_batchsize
 
-		random_key = np.random.choice(list(self.target_dict.keys()))
-		subdir_image_paths = [os.path.join(self.target_path, random_key, image_name)
-								for image_name in np.random.choice(self.target_dict[random_key], batch_size)]
+		if self.target_dataset == 'cartoonset100k':
+			random_key = np.random.choice(list(self.target_images.keys()))
+			subdir_image_paths = [os.path.join(self.target_path, random_key, image_name)
+								for image_name in np.random.choice(self.target_images[random_key], batch_size)]
+		else:	# bitmoji
+			subdir_image_paths = [os.path.join(self.target_path, image_name) for image_name in np.random.choice(self.target_images, batch_size)]
+
 		batch_images = [cv2.cvtColor(cv2.imread(image_path), cv2.COLOR_BGR2RGB) for image_path in subdir_image_paths]
 		batch_images_trimmed = [self.trim_around_images(image) for image in batch_images]
 		batch_images_resized = [resize(image, (self.img_rows, self.img_cols), mode='reflect')
@@ -341,11 +323,11 @@ class DTN:
 		if self.verbose: print("Training Started!\n")
 		batch_size = self.train_batchsize
 		y_1 = np.zeros((batch_size, 3))
-		y_1[:, 2] = np.ones(batch_size)	 # [0,0,1] for G(x_s)
+		y_1[:, 2] = np.ones(batch_size)  # [0,0,1] for G(x_s)
 		y_2 = np.zeros((batch_size, 3))
-		y_2[:, 1] = np.ones(batch_size)	 # [0,1,0] for G(x_t)
+		y_2[:, 1] = np.ones(batch_size)  # [0,1,0] for G(x_t)
 		y_3 = np.zeros((batch_size, 3))
-		y_3[:, 0] = np.ones(batch_size)	 # [1,0,0] for x_t
+		y_3[:, 0] = np.ones(batch_size)  # [1,0,0] for x_t
 
 		y_gang = np.concatenate((y_3, y_3))
 
@@ -354,10 +336,10 @@ class DTN:
 		# # https://gist.github.com/erenon/91f526302cd8e9d21b73f24c0f9c4bb8   # #
 		# --------------------------------------------------------------------- #
 		# d_callback = keras.callbacks.TensorBoard(log_dir=self.log_path, histogram_freq=0, batch_size=batch_size,
-		# 											write_graph=True, write_grads=True)
+		#                                           write_graph=True, write_grads=True)
 		# d_callback.set_model(self.discriminator)
 		# g_callback = keras.callbacks.TensorBoard(log_dir=self.log_path, histogram_freq=0, batch_size=batch_size,
-		# 											write_graph=True, write_grads=True)
+		#                                           write_graph=True, write_grads=True)
 		# g_callback.set_model(self.dtn)
 		# --------------------------------------------------------------------- #
 
@@ -462,21 +444,24 @@ class DTN:
 
 
 if __name__ == "__main__":
-	# facedet_cascade_path = './facenet/haarcascade_frontalface_alt2.xml'
-	# facenet_model_path = './facenet/facenet_keras.h5'
-	# source_path = './img_align_celeba'
+	facedet_cascade_path = './facenet/haarcascade_frontalface_alt2.xml'
+	facenet_model_path = './facenet/facenet_keras.h5'
+	source_path = './img_align_celeba'
 	# target_path = './cartoonset100k'
+	target_dataset = 'cartoonset100k'
+	target_path = './bitmoji_data'
+	target_dataset = 'bitmoji'
 	source_list_path = './source_list.pkl'
 	target_dict_path = './target_dict.pkl'
 	output_path = './outputs'
 
 	# # PATHS FOR DEEPAK PLISS TO COMMENT IF IT IS INTERFERING # #
-	facedet_cascade_path = '../keras-facenet/model/cv2/haarcascade_frontalface_alt2.xml'
-	facenet_model_path = '../keras-facenet/model/new_facenet_keras.h5'
-	source_path = '/Volumes/Macintosh HD/DTN/img_align_celeba_samples'
-	target_path = '/Volumes/Macintosh HD/DTN/cartoonset10k_samples'
+	# facedet_cascade_path = '../keras-facenet/model/cv2/haarcascade_frontalface_alt2.xml'
+	# facenet_model_path = '../keras-facenet/model/new_facenet_keras.h5'
+	# source_path = '/Volumes/Macintosh HD/DTN/img_align_celeba_samples'
+	# target_path = '/Volumes/Macintosh HD/DTN/cartoonset10k_samples'
 	##############################################################
 
 	verbose = True
-	dtn = DTN(facedet_cascade_path, facenet_model_path, source_path, source_list_path, target_dict_path, target_path, output_path, verbose=verbose, batch_save_frequency=160, from_ckpt=False, train_batchsize=16, predict=False)
+	dtn = DTN(facedet_cascade_path, facenet_model_path, source_path, source_list_path, target_dict_path, target_path, output_path, target_dataset, verbose=verbose, batch_save_frequency=160, from_ckpt=False, train_batchsize=16, predict=False)
 	dtn.train(epochs=10)
