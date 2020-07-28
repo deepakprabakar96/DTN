@@ -2,14 +2,13 @@
 
 """
 Updates:
-1. Code changes made on dtn_digits script
+1. Modified G and D(removed dense layer)
+2. Loding MNIST dataset and converted to 3 channel images
 
 To do:
-1. Modify G
-2. Download MNIST dataset and pad and preprocess it for usage here (1 channel -> 3 channel)
-3. Datasets being loaded in this script have been preprocessed --> Create a notebook with code for all this
+1. Datasets being loaded in this script have been preprocessed --> Create a notebook with code for all this
    preprocessing from downloadable datasets to improve reproducability of repo
-4. Decide on training on 1 channel or 3 channel images and change code later (pad single channel image thrice for now)
+2. Decide on training on 1 channel or 3 channel images and change code later (pad single channel image thrice for now)
 """
 
 from keras.layers import Input, Dense, Reshape, Flatten, Dropout
@@ -21,6 +20,7 @@ from keras.layers import Conv2D, Conv2DTranspose
 from keras.models import load_model
 from keras.utils.vis_utils import plot_model
 from keras import backend as K
+from keras.datasets import mnist
 import keras
 
 import tensorflow as tf
@@ -35,7 +35,7 @@ import matplotlib.pyplot as plt
 
 
 class DTN:
-	def __init__(self, encoder_model_path, source_paths, target_paths, output_path, train_batchsize=16, batch_save_frequency=100, verbose=False, from_ckpt=False, predict=False):
+	def __init__(self, encoder_model_path, source_paths, output_path, train_batchsize=16, batch_save_frequency=100, verbose=False, from_ckpt=False, predict=False):
 		self.verbose = verbose
 
 		self.log_path = "./logs"
@@ -104,8 +104,10 @@ class DTN:
 		self.source_images = np.load(source_paths[0])
 		self.source_truths = np.load(source_paths[1])
 
-		self.target_images = np.load(target_paths[0])
-		self.target_truths = np.load(target_paths[1])
+		(X_train, y_train), (_, _) = mnist.load_data()
+
+		self.target_images = X_train
+		self.target_truths = y_train
 
 		self.n_source_images = self.source_images.shape[0]
 		self.n_target_images = self.target_images.shape[0]
@@ -179,8 +181,6 @@ class DTN:
 
 		model.add(Conv2D(128, (3, 3), strides=(2, 2), padding='same', kernel_initializer=init))
 		model.add(LeakyReLU(alpha=0.2))
-		
-		model.add(Dense(128, activation='relu'))
 
 		model.add(Flatten())
 		model.add(Dense(3, activation='softmax'))
@@ -191,16 +191,16 @@ class DTN:
 		init = RandomNormal(stddev=0.02)
 		model = Sequential()
 
-		n_nodes = 128 * 40 * 40
+		n_nodes = 128 * 8 * 8
 		encoded_op_shape = 128
 		model.add(Dense(n_nodes, kernel_initializer=init, input_dim=encoded_op_shape))
 		model.add(LeakyReLU(alpha=0.2))
-		model.add(Reshape((40, 40, 128)))
+		model.add(Reshape((8, 8, 128)))
 		# 80x80x128:
-		model.add(Conv2DTranspose(128, (4, 4), strides=(2, 2), padding='same', kernel_initializer=init))
+		model.add(Conv2DTranspose(128, (3, 3), strides=(2, 2), padding='same', kernel_initializer=init))
 		model.add(LeakyReLU(alpha=0.2))
 		# 160x160x128:
-		model.add(Conv2DTranspose(128, (4, 4), strides=(2, 2), padding='same', kernel_initializer=init))
+		model.add(Conv2DTranspose(128, (3, 3), strides=(2, 2), padding='same', kernel_initializer=init))
 		model.add(LeakyReLU(alpha=0.2))
 		# 160x160x3:
 		model.add(Conv2D(3, (7, 7), activation='tanh', padding='same', kernel_initializer=init))
@@ -235,13 +235,6 @@ class DTN:
 
 		self.dtn.compile(loss=losses, loss_weights=loss_weights, optimizer=self.optimizer)
 
-		# Figure out how to initiliaze optimizer with weights shape.
-		# This seems to work only after training one batch:
-		# if self.from_ckpt==True:
-		# 	with open(self.weight_paths[2], 'rb') as f:
-		# 		opt_values = pickle.load(f)
-		# 	self.dtn.optimizer.set_weights(opt_values)
-		# 	self.from_ckpt = False
 
 		print("\n\n" + "*" * 15)
 		print("DTN SUMMARY:")
@@ -254,7 +247,9 @@ class DTN:
 			batch_size = self.train_batchsize
 
 		random_batch_indices = np.random.choice(range(self.n_target_images), batch_size)
-		batch_images = [self.target_images[ind, :, :, :] for ind in random_batch_indices]
+		batch_images = [self.target_images[ind, :, :] for ind in random_batch_indices]
+		batch_images = [cv2.cvtColor(im, cv2.COLOR_GRAY2RGB) for im in batch_images]
+		batch_images = [cv2.resize(im, (self.img_rows, self.img_cols), cv2.INTER_NEAREST) for im in batch_images]
 		batch_as_numpy = np.empty((batch_size, self.img_rows, self.img_cols, self.channels))
 		for i in range(batch_size):
 			batch_as_numpy[i, :, :, :] = batch_images[i]
@@ -435,23 +430,10 @@ class DTN:
 
 
 if __name__ == "__main__":
-	# facedet_cascade_path = './facenet/haarcascade_frontalface_alt2.xml'
-	# facenet_model_path = './facenet/facenet_keras.h5'
-	# source_path = './img_align_celeba'
-	# target_path = './cartoonset100k'
-	source_list_path = './source_list.pkl'
-	target_dict_path = './target_dict.pkl'
+	encoder_model_path = './svhn_encoder.h5'
+	source_paths = ['./temp.npy', './temp2.npy']
 	output_path = './outputs'
 
-	# # PATHS FOR DEEPAK PLISS TO COMMENT IF IT IS INTERFERING # #
-	facedet_cascade_path = '../keras-facenet/model/cv2/haarcascade_frontalface_alt2.xml'
-	facenet_model_path = '../keras-facenet/model/new_facenet_keras.h5'
-	source_path = '/Volumes/Macintosh HD/DTN/img_align_celeba_samples'
-	target_path = '/Volumes/Macintosh HD/DTN/cartoonset10k_samples'
-	##############################################################
-
 	verbose = True
-	dtn = DTN(facedet_cascade_path, facenet_model_path, source_path, source_list_path, target_dict_path, target_path,
-			  output_path, verbose=verbose, batch_save_frequency=160, from_ckpt=False, train_batchsize=16,
-			  predict=False)
+	dtn = DTN(encoder_model_path, source_paths, output_path, train_batchsize=128, verbose=verbose)
 	dtn.train(epochs=10)
