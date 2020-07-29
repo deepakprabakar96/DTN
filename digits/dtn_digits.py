@@ -32,10 +32,12 @@ import cv2
 import os
 from tqdm import tqdm
 import matplotlib.pyplot as plt
+from skimage.transform import resize
+from scipy.io import loadmat
 
 
 class DTN:
-	def __init__(self, encoder_model_path, source_paths, output_path, train_batchsize=16, batch_save_frequency=100, verbose=False, from_ckpt=False, predict=False):
+	def __init__(self, encoder_model_path, source_path, output_path, train_batchsize=16, batch_save_frequency=100, verbose=False, from_ckpt=False, predict=False):
 		self.verbose = verbose
 
 		self.log_path = "./logs"
@@ -95,19 +97,18 @@ class DTN:
 
 		self.discriminator.trainable = False
 
-		# all class members should be initialized in the init function first
 		self.dtn = Model()
 		self.build_dtn()
 
 		if self.verbose: print("DTN model built!\n")
 
-		self.source_images = np.load(source_paths[0])
-		self.source_truths = np.load(source_paths[1])
+		mat = loadmat(source_path)
+		self.source_images = mat['X']
+		self.source_images = np.moveaxis(self.source_images, -1, 0)
 
-		(X_train, y_train), (_, _) = mnist.load_data()
+		(X_train, _), (X_test, _) = mnist.load_data()
 
-		self.target_images = X_train
-		self.target_truths = y_train
+		self.target_images = np.concatenate((X_train,X_test))
 
 		self.n_source_images = self.source_images.shape[0]
 		self.n_target_images = self.target_images.shape[0]
@@ -196,13 +197,13 @@ class DTN:
 		model.add(Dense(n_nodes, kernel_initializer=init, input_dim=encoded_op_shape))
 		model.add(LeakyReLU(alpha=0.2))
 		model.add(Reshape((8, 8, 128)))
-		# 80x80x128:
+
 		model.add(Conv2DTranspose(128, (3, 3), strides=(2, 2), padding='same', kernel_initializer=init))
 		model.add(LeakyReLU(alpha=0.2))
-		# 160x160x128:
+
 		model.add(Conv2DTranspose(128, (3, 3), strides=(2, 2), padding='same', kernel_initializer=init))
 		model.add(LeakyReLU(alpha=0.2))
-		# 160x160x3:
+
 		model.add(Conv2D(3, (7, 7), activation='tanh', padding='same', kernel_initializer=init))
 
 		return model
@@ -240,7 +241,7 @@ class DTN:
 		print("DTN SUMMARY:")
 		print(self.dtn.summary())
 
-	# plot_model(self.dtn, to_file='./dtn_plot.png', show_shapes=True, show_layer_names=True)
+		plot_model(self.dtn, to_file='./dtn_plot.png', show_shapes=True, show_layer_names=True)
 
 	def load_target(self, batch_size=None):
 		if not batch_size:
@@ -248,12 +249,10 @@ class DTN:
 
 		random_batch_indices = np.random.choice(range(self.n_target_images), batch_size)
 		batch_images = [self.target_images[ind, :, :] for ind in random_batch_indices]
-		batch_images = [cv2.cvtColor(im, cv2.COLOR_GRAY2RGB) for im in batch_images]
-		batch_images = [cv2.resize(im, (self.img_rows, self.img_cols), cv2.INTER_NEAREST) for im in batch_images]
-		batch_as_numpy = np.empty((batch_size, self.img_rows, self.img_cols, self.channels))
-		for i in range(batch_size):
-			batch_as_numpy[i, :, :, :] = batch_images[i]
-		return batch_as_numpy
+		batch_images = np.array([cv2.cvtColor(im, cv2.COLOR_GRAY2RGB) for im in batch_images])
+		batch_images = [resize(im, (self.img_rows, self.img_cols), mode='reflect') for im in batch_images]
+		
+		return np.array(batch_images)
 
 	def load_source(self, batch_size=None):
 		if not batch_size:
@@ -261,10 +260,9 @@ class DTN:
 
 		random_batch_indices = np.random.choice(range(self.n_source_images), batch_size)
 		batch_images = [self.source_images[ind, :, :, :] for ind in random_batch_indices]
-		batch_as_numpy = np.empty((batch_size, self.img_rows, self.img_cols, self.channels))
-		for i in range(batch_size):
-			batch_as_numpy[i, :, :, :] = batch_images[i]
-		return batch_as_numpy
+		batch_images = [resize(im, (self.img_rows, self.img_cols), mode='reflect') for im in batch_images]
+
+		return np.array(batch_images)
 
 	@staticmethod
 	def write_log(callback, names, logs, batch_no):
@@ -431,9 +429,9 @@ class DTN:
 
 if __name__ == "__main__":
 	encoder_model_path = './svhn_encoder.h5'
-	source_paths = ['./temp.npy', './temp2.npy']
+	source_path = './train_32x32.mat'
 	output_path = './outputs'
 
 	verbose = True
-	dtn = DTN(encoder_model_path, source_paths, output_path, train_batchsize=128, verbose=verbose)
+	dtn = DTN(encoder_model_path, source_path, output_path, train_batchsize=128, verbose=verbose)
 	dtn.train(epochs=10)
