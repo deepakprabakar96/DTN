@@ -13,7 +13,7 @@ Contributors: [Deepak Prabakar](https://www.linkedin.com/in/deepak-prabakar/), [
 - matplotlib
 - pickle
 
-###Structure of the Project
+### Structure of the Project
 
 ```
 DTN
@@ -41,10 +41,10 @@ DTN
 ```
 ### Datasets
 
-####Faces
+#### Faces
 - Source Domain:    [CelebA](http://mmlab.ie.cuhk.edu.hk/projects/CelebA.html) 
 - Target Domain:    Generated Bitmoji images (See Reference 2)
-####Digits
+#### Digits
 - Source Domain:    [SVHN](http://ufldl.stanford.edu/housenumbers/)
 - Target Domain:    [MNIST](http://yann.lecun.com/exdb/mnist/)
 
