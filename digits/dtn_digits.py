@@ -1,16 +1,3 @@
-# coding=utf-8
-
-"""
-Updates:
-1. Modified G and D(removed dense layer)
-2. Loding MNIST dataset and converted to 3 channel images
-
-To do:
-1. Datasets being loaded in this script have been preprocessed --> Create a notebook with code for all this
-   preprocessing from downloadable datasets to improve reproducability of repo
-2. Decide on training on 1 channel or 3 channel images and change code later (pad single channel image thrice for now)
-"""
-
 from keras.layers import Input, Dense, Reshape, Flatten, Dropout
 from keras.layers.advanced_activations import LeakyReLU
 from keras.models import Sequential, Model
@@ -42,11 +29,14 @@ class DTN:
 
 		self.log_path = "./logs"
 		self.save_path = "./model"
+		self.output_path = output_path
 
 		if not os.path.exists(self.log_path):
 			os.makedirs(self.log_path)
 		if not os.path.exists(self.save_path):
 			os.makedirs(self.save_path)
+		if not os.path.exists(self.output_path):
+			os.makedirs(self.output_path)
 
 		self.batch_save_frequency = batch_save_frequency
 
@@ -59,11 +49,11 @@ class DTN:
 
 		self.img_rows = 32
 		self.img_cols = 32
-		self.channels = 3
+		self.channels = 1
 		self.img_shape = (self.img_rows, self.img_cols, self.channels)
 
 		self.train_batchsize = train_batchsize
-		self.optimizer = Adam(0.0002, 0.5)
+		self.optimizer = Adam(0.001, 0.5)
 
 		self.discriminator = self.build_discriminator()
 
@@ -80,13 +70,13 @@ class DTN:
 		self.encoder_f.name += '_0'
 		self.encoder_f.trainable = False
 
-		if self.verbose: print("Encoder_0 loaded!\n")
+		if self.verbose: print("Encoder " + self.encoder_f.name + " loaded!\n")
 
 		self.encoder_f2 = load_model(encoder_model_path)
 		self.encoder_f2.name += '_1'
 		self.encoder_f2.trainable = False
 
-		if self.verbose: print("Encoder_1 loaded!\n")
+		if self.verbose: print("Encoder " + self.encoder_f2.name + " loaded!\n")
 
 		if self.from_ckpt:
 			self.decoder_g = load_model(self.weight_paths[2])
@@ -101,21 +91,26 @@ class DTN:
 		self.build_dtn()
 
 		if self.verbose: print("DTN model built!\n")
-
+		
 		mat = loadmat(source_path)
 		self.source_images = mat['X']
 		self.source_images = np.moveaxis(self.source_images, -1, 0)
+		
+		single_channel_images = [cv2.cvtColor(im, cv2.COLOR_RGB2GRAY) for im in self.source_images]
+		print('Resizing and normalizing source images:')
+		single_channel_images = [resize(im, (self.img_rows, self.img_cols), mode='reflect') for im in tqdm(single_channel_images)]
+		self.source_images = np.expand_dims(np.array(single_channel_images), axis=3)
 
 		(X_train, _), (X_test, _) = mnist.load_data()
-
 		self.target_images = np.concatenate((X_train,X_test))
+		print('Resizing and normalizing target images:')
+		self.target_images = np.array([resize(im, (self.img_rows, self.img_cols), mode='reflect') for im in tqdm(self.target_images)])
+		self.target_images = np.expand_dims(self.target_images, axis=3)
 
 		self.n_source_images = self.source_images.shape[0]
 		self.n_target_images = self.target_images.shape[0]
 
 		if self.verbose: print("Datasets loaded!\n")
-
-		self.output_path = output_path
 
 		self.predict = predict
 
@@ -204,7 +199,7 @@ class DTN:
 		model.add(Conv2DTranspose(128, (3, 3), strides=(2, 2), padding='same', kernel_initializer=init))
 		model.add(LeakyReLU(alpha=0.2))
 
-		model.add(Conv2D(3, (7, 7), activation='tanh', padding='same', kernel_initializer=init))
+		model.add(Conv2D(1, (7, 7), activation='tanh', padding='same', kernel_initializer=init))
 
 		return model
 
@@ -216,8 +211,8 @@ class DTN:
 		return L_custom
 
 	def build_dtn(self):
-		alpha = 100
-		beta = 1
+		alpha = 16
+		beta = 16
 
 		source_const = Input(shape=(1,))
 		source_tid = Input(shape=(1, 1, 1))
@@ -241,16 +236,14 @@ class DTN:
 		print("DTN SUMMARY:")
 		print(self.dtn.summary())
 
-		plot_model(self.dtn, to_file='./dtn_plot.png', show_shapes=True, show_layer_names=True)
+		plot_model(self.dtn, to_file='./dtn_one_channel_plot.png', show_shapes=True, show_layer_names=True)
 
 	def load_target(self, batch_size=None):
 		if not batch_size:
 			batch_size = self.train_batchsize
 
 		random_batch_indices = np.random.choice(range(self.n_target_images), batch_size)
-		batch_images = [self.target_images[ind, :, :] for ind in random_batch_indices]
-		batch_images = np.array([cv2.cvtColor(im, cv2.COLOR_GRAY2RGB) for im in batch_images])
-		batch_images = [resize(im, (self.img_rows, self.img_cols), mode='reflect') for im in batch_images]
+		batch_images = [self.target_images[ind, :, :, :] for ind in random_batch_indices]
 		
 		return np.array(batch_images)
 
@@ -260,8 +253,7 @@ class DTN:
 
 		random_batch_indices = np.random.choice(range(self.n_source_images), batch_size)
 		batch_images = [self.source_images[ind, :, :, :] for ind in random_batch_indices]
-		batch_images = [resize(im, (self.img_rows, self.img_cols), mode='reflect') for im in batch_images]
-
+		
 		return np.array(batch_images)
 
 	@staticmethod
@@ -356,14 +348,14 @@ class DTN:
 				os.mkdir(self.output_path + '/{}_batches'.format(batch_number))
 
 				for i in range(batch_size):
+
 					fig, axs = plt.subplots(2, 2)
-					axs[0, 0].imshow(x_T[i])
-					axs[0, 1].imshow(pred_x_T[i])
-					axs[1, 0].imshow(x_S[i])
-					axs[1, 1].imshow(pred_x_S[i])
+					axs[0, 0].imshow(x_T[i][:, :, 0], cmap='gray')
+					axs[0, 1].imshow(pred_x_T[i][:, :, 0], cmap='gray')
+					axs[1, 0].imshow(x_S[i][:, :, 0], cmap='gray')
+					axs[1, 1].imshow(pred_x_S[i][:, :, 0], cmap='gray')
 					fig.savefig(self.output_path + "/{0}_batches/{1}.png".format(batch_number, i))
-					if self.predict:
-						plt.show()
+
 				if self.predict:
 					break
 
@@ -427,6 +419,7 @@ class DTN:
 		self.pred_model = Model(inputs=inp, outputs=generator_op)
 
 
+
 if __name__ == "__main__":
 	encoder_model_path = './svhn_encoder.h5'
 	source_path = './train_32x32.mat'
@@ -434,4 +427,4 @@ if __name__ == "__main__":
 
 	verbose = True
 	dtn = DTN(encoder_model_path, source_path, output_path, train_batchsize=128, verbose=verbose)
-	dtn.train(epochs=10)
+	dtn.train(epochs=5)
