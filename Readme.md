@@ -1,4 +1,14 @@
+<p align="center">
+
+![Image](https://i.imgur.com/NvA2LVI.jpg)
+</p>
+
 ## Domain Transfer Network (DTN)
+
+<p align="center">
+
+![Image](https://media.giphy.com/media/WooO2XCyF19Cef8gdQ/giphy.gif)
+</p>
 
 This is an implementation of [Unsupervised Cross-Domain Image Generation](https://arxiv.org/abs/1611.02200) on Keras.
 
@@ -49,8 +59,14 @@ DTN
 - Target Domain:    [MNIST](http://yann.lecun.com/exdb/mnist/)
 
 ### Results
+#### Faces
+We were able to achieve only limited results from DTN for faces. These are some of the best results from all the training configurations we tried. You can notice that several features such as facial shape, lip and hair color and eyeglasses have been successfully transferred to the generated image in some of these cases.
 
+The first column represents the model's ability to learn an identity transformation for Bitmoji images while the second column represents its domain transformation capabilities.  
+![Image](https://i.imgur.com/GPkMemX.jpg)
 
+#### Digits
+DTN was significantly more successful at transferring digits.
 ### References
 
 1. [Unsupervised Cross-Domain Image Generation](https://arxiv.org/abs/1611.02200)
