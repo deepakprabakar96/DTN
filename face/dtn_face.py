@@ -27,8 +27,26 @@ import matplotlib.pyplot as plt
 
 
 class DTN:
-	def __init__(self, facedet_cascade_path, facenet_model_path, source_path, source_list_path, target_dict_path, target_path,
-								output_path, target_dataset='bitmoji', train_batchsize=16, batch_save_frequency=100, verbose=False, from_ckpt=False, predict=False):
+	def __init__(self, facedet_cascade_path, facenet_model_path, source_path, source_list_path, target_path,
+								output_path,  train_batchsize=16, batch_save_frequency=100, verbose=False, from_ckpt=False, predict=False):
+		'''
+		Params:
+
+		facedet_cascade_path: haar cascade classifier path
+		facenet_model_path:   facenet model path, string
+		source_path:		  source dataset folder path, string
+		source_list_path:	  path of pickle file containing list of images from source dataset for which haar cascade model detected faces, string
+		target_path:		  target dataset folder path, string
+		output_path:		  output folder path where generated images will be saved, string
+		train_batchsize:	  train batch size, int
+		batch_save_frequency: number of batches after which models and generated images will be saved, int
+		verbose:			  whether to print log information, bool
+		from_ckpt:			  checkpoint model information, data type can be one of the following:
+							  int: checkpoint number, picks models with the given checkpoint number
+							  tuple: tuple of strings containing paths of weights in order: (d_weights.h5, d_optimizer.pkl, dtn_weights.h5, dtn_optimizer.pkl)
+							  bool: picks latest checkpoint from save_path folder if True, trains from scratch if False
+		predict:			  whether to use the script as inference script, bool
+		'''
 		self.verbose = verbose
 
 		self.log_path = "./logs"
@@ -46,6 +64,7 @@ class DTN:
 		self.weight_paths = ()
 		self.ckpt_number = -1
 
+		# initializing checkpoint information if from_ckpt = True
 		self.initialize_ckpt_paths(from_ckpt)
 
 		self.img_rows = 160
@@ -97,6 +116,7 @@ class DTN:
 
 		if self.verbose: print("DTN model built!\n")
 
+		# load source dataset
 		self.source_path = source_path
 
 		f = open(source_list_path, 'rb')
@@ -106,20 +126,15 @@ class DTN:
 
 		if self.verbose: print("Source dataset processed!\n")
 
+		# load target dataset
 		self.target_path = target_path
-		self.target_dataset = target_dataset
-
-		if self.target_dataset == 'cartoonset100k':
-			f = open(target_dict_path, 'rb')
-			self.target_images = pickle.load(f)
-			f.close()
-		else:	# bitmoji
-			self.target_images = os.listdir(target_path)
+		self.target_images = os.listdir(target_path)
 
 		if self.verbose: print("Target dataset processed!\n")
 
 		self.output_path = output_path
 
+		# build network to get inference
 		self.predict = predict
 		self.pred_model = Model()
 		self.build_pred_network()
@@ -239,10 +254,11 @@ class DTN:
 		print("DTN SUMMARY:")
 		print(self.dtn.summary())
 
-		# plot_model(self.dtn, to_file='./dtn_plot.png', show_shapes=True, show_layer_names=True)
+		plot_model(self.dtn, to_file='./dtn_plot.png', show_shapes=True, show_layer_names=True)
 
 	@staticmethod
 	def trim_around_images(image, margin=20):
+		# Used to trim target dataset around the edges of a face to match source dataset after using haar cascade
 		h, w, c = image.shape
 		trimmed_image = image[int(h * margin / 100):int(h * (100 - margin) / 100),
 									int(w * margin / 100):int(w * (100 - margin) / 100), :]
@@ -252,22 +268,15 @@ class DTN:
 		if not batch_size:
 			batch_size = self.train_batchsize
 
-		if self.target_dataset == 'cartoonset100k':
-			random_key = np.random.choice(list(self.target_images.keys()))
-			subdir_image_paths = [os.path.join(self.target_path, random_key, image_name)
-								for image_name in np.random.choice(self.target_images[random_key], batch_size)]
-		else:	# bitmoji
-			subdir_image_paths = [os.path.join(self.target_path, image_name) for image_name in np.random.choice(self.target_images, batch_size)]
+		batch_image_paths = [os.path.join(self.target_path, image_name) for image_name in np.random.choice(self.target_images, batch_size)]
 
-		batch_images = [cv2.cvtColor(cv2.imread(image_path), cv2.COLOR_BGR2RGB) for image_path in subdir_image_paths]
+		batch_images = [cv2.cvtColor(cv2.imread(image_path), cv2.COLOR_BGR2RGB) for image_path in batch_image_paths]
 		batch_images_trimmed = [self.trim_around_images(image) for image in batch_images]
 		batch_images_resized = [resize(image, (self.img_rows, self.img_cols), mode='reflect')
 								for image in batch_images_trimmed]
 
-		batch_as_numpy = np.empty((batch_size, self.img_rows, self.img_cols, self.channels))
-		for i in range(batch_size):
-			batch_as_numpy[i, :, :, :] = batch_images_resized[i]
-		return prewhiten(batch_as_numpy)
+		batch_images_resized = np.array(batch_images_resized)
+		return prewhiten(batch_images_resized)
 
 	def load_source(self, batch_size=None):
 		if not batch_size:
@@ -276,10 +285,9 @@ class DTN:
 												np.random.choice(self.source_images, batch_size)]
 		batch_images = [cv2.cvtColor(cv2.imread(image_path), cv2.COLOR_BGR2RGB) for image_path in batch_image_paths]
 		batch_images_aligned = [self.encoder_preprocess(image) for image in batch_images]
-		batch_as_numpy = np.empty((batch_size, self.img_rows, self.img_cols, self.channels))
-		for i in range(batch_size):
-			batch_as_numpy[i, :, :, :] = batch_images_aligned[i]
-		return prewhiten(batch_as_numpy)
+
+		batch_images_aligned = np.array(batch_images_aligned)
+		return prewhiten(batch_images_aligned)
 
 	@staticmethod
 	def write_log(callback, names, logs, batch_no):
@@ -414,7 +422,7 @@ class DTN:
 
 			L_dtn = self.dtn.train_on_batch([x_dtn, source_const, source_tid], [y_gang, y_const, y_tid])
 
-			# set optimizer state after training one batch:
+			# set model weights and optimizer states after training one batch:
 			if self.from_ckpt and batch_number == 1:
 				with open(self.weight_paths[3], 'rb') as f:
 					opt_values = pickle.load(f)
@@ -447,21 +455,10 @@ if __name__ == "__main__":
 	facedet_cascade_path = './facenet/haarcascade_frontalface_alt2.xml'
 	facenet_model_path = './facenet/facenet_keras.h5'
 	source_path = './img_align_celeba'
-	# target_path = './cartoonset100k'
-	target_dataset = 'cartoonset100k'
 	target_path = './bitmoji_data'
-	target_dataset = 'bitmoji'
 	source_list_path = './source_list.pkl'
-	target_dict_path = './target_dict.pkl'
 	output_path = './outputs'
 
-	# # PATHS FOR DEEPAK PLISS TO COMMENT IF IT IS INTERFERING # #
-	# facedet_cascade_path = '../keras-facenet/model/cv2/haarcascade_frontalface_alt2.xml'
-	# facenet_model_path = '../keras-facenet/model/new_facenet_keras.h5'
-	# source_path = '/Volumes/Macintosh HD/DTN/img_align_celeba_samples'
-	# target_path = '/Volumes/Macintosh HD/DTN/cartoonset10k_samples'
-	##############################################################
-
 	verbose = True
-	dtn = DTN(facedet_cascade_path, facenet_model_path, source_path, source_list_path, target_dict_path, target_path, output_path, target_dataset, verbose=verbose, batch_save_frequency=160, from_ckpt=False, train_batchsize=16, predict=False)
+	dtn = DTN(facedet_cascade_path, facenet_model_path, source_path, source_list_path, target_path, output_path, verbose=verbose, batch_save_frequency=160, from_ckpt=False, train_batchsize=16, predict=False)
 	dtn.train(epochs=10)

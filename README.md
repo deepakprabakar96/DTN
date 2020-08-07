@@ -12,10 +12,13 @@ Contributors: [Deepak Prabakar](https://www.linkedin.com/in/deepak-prabakar/), [
 
 - keras
 - tensorflow
-- opencv
-- skimage
+- opencv-python
+- scikit-image
+- scipy
 - matplotlib
 - pickle
+- pydot
+- tqdm
 
 ### Structure of the Project
 
@@ -36,8 +39,7 @@ DTN
 └--face
 |   |   dtn_face.py                             --> script for training faces DTN
 |   |   no_faces.npy                            --> list of images from the source dataset where faces weren't found
-|   |   source_list.pkl                         --> list of images from the source dataset
-|   |   target_dict.pkl                         --> dictionary specifying structure target dataset folder for cartoonset100k training
+|   |   source_list.pkl                         --> list of images from the source dataset excluding images from no_faces.npy
 |   |
 │   └---facenet                                 --> See reference 3
 |   |   |   facenet_keras.h5                    --> encoder for faces DTN
@@ -59,6 +61,7 @@ DTN
 
 ### Results
 #### Faces
+We used Google's Facenet as an alternative to Facebook's Deepface model to implement the encoder in our network.
 We were able to achieve only limited results from DTN for faces. These are some of the best results from all the training configurations we tried. You can notice that several features such as facial shape, lip and hair color and eyeglasses have been successfully transferred to the generated image in some of these cases.
 
 The first column represents the model's ability to learn an identity transformation for Bitmoji images while the second column represents its domain transformation capabilities.

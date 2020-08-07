@@ -25,6 +25,21 @@ from scipy.io import loadmat
 
 class DTN:
 	def __init__(self, encoder_model_path, source_path, output_path, train_batchsize=16, batch_save_frequency=100, verbose=False, from_ckpt=False, predict=False):
+		'''
+		Params:
+
+		source_path:		  path of .mat file for source dataset, string
+		output_path:		  output folder path where generated images will be saved, string
+		train_batchsize:	  train batch size, int
+		batch_save_frequency: number of batches after which models and generated images will be saved, int
+		verbose:			  whether to print log information, bool
+		from_ckpt:			  checkpoint model information, data type can be one of the following:
+							  int: checkpoint number, picks models with the given checkpoint number
+							  tuple: tuple of strings containing paths of weights in order: (d_weights.h5, d_optimizer.pkl, dtn_weights.h5, dtn_optimizer.pkl)
+							  bool: picks latest checkpoint from save_path folder if True, trains from scratch if False
+		predict:			  whether to use the script as inference script, bool
+		'''
+
 		self.verbose = verbose
 
 		self.log_path = "./logs"
@@ -45,6 +60,7 @@ class DTN:
 		self.weight_paths = ()
 		self.ckpt_number = -1
 
+		# initializing checkpoint information if from_ckpt = True
 		self.initialize_ckpt_paths(from_ckpt)
 
 		self.img_rows = 32
@@ -92,6 +108,7 @@ class DTN:
 
 		if self.verbose: print("DTN model built!\n")
 		
+		# load source dataset
 		mat = loadmat(source_path)
 		self.source_images = mat['X']
 		self.source_images = np.moveaxis(self.source_images, -1, 0)
@@ -100,12 +117,15 @@ class DTN:
 		print('Resizing and normalizing source images:')
 		single_channel_images = [resize(im, (self.img_rows, self.img_cols), mode='reflect') for im in tqdm(single_channel_images)]
 		self.source_images = np.expand_dims(np.array(single_channel_images), axis=3)
+		if self.verbose: print("Source dataset processed!\n")
 
+		# load target dataset
 		(X_train, _), (X_test, _) = mnist.load_data()
 		self.target_images = np.concatenate((X_train,X_test))
 		print('Resizing and normalizing target images:')
 		self.target_images = np.array([resize(im, (self.img_rows, self.img_cols), mode='reflect') for im in tqdm(self.target_images)])
 		self.target_images = np.expand_dims(self.target_images, axis=3)
+		if self.verbose: print("Target dataset processed!\n")
 
 		self.n_source_images = self.source_images.shape[0]
 		self.n_target_images = self.target_images.shape[0]
@@ -236,7 +256,7 @@ class DTN:
 		print("DTN SUMMARY:")
 		print(self.dtn.summary())
 
-		plot_model(self.dtn, to_file='./dtn_one_channel_plot.png', show_shapes=True, show_layer_names=True)
+		plot_model(self.dtn, to_file='./dtn_digits_plot.png', show_shapes=True, show_layer_names=True)
 
 	def load_target(self, batch_size=None):
 		if not batch_size:
@@ -390,7 +410,7 @@ class DTN:
 
 			L_dtn = self.dtn.train_on_batch([x_dtn, source_const, source_tid], [y_gang, y_const, y_tid])
 
-			# set optimizer state after training one batch:
+			# set model weights and optimizer states after training one batch:
 			if self.from_ckpt and batch_number == 1:
 				with open(self.weight_paths[3], 'rb') as f:
 					opt_values = pickle.load(f)
